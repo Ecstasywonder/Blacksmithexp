@@ -1,0 +1,11 @@
+{
+  "name": "@chairly/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@chairly/shared": "workspace:*" },
+  "devDependencies": { "typescript": "^5.9.2" }
+}
+
