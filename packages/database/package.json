@@ -3,11 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./schema": "./src/schema.ts" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts"
+  },
   "scripts": {
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:test": "drizzle-kit migrate",
+    "test": "tsx --test src/public-booking-catalog.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,7 +21,7 @@
   "devDependencies": {
     "@types/node": "^22.15.0",
     "drizzle-kit": "^0.31.4",
+    "tsx": "^4.20.0",
     "typescript": "^5.9.2"
   }
 }
-

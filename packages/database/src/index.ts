@@ -3,6 +3,11 @@ import postgres from "postgres";
 import * as schema from "./schema";
 
 export { withTenantTransaction } from "./tenant-transaction";
+export {
+  getPublishedBookingCatalog,
+  type PublicBookingCatalog,
+  type PublicBookingService,
+} from "./public-booking-catalog";
 
 /**
  * Creates the server-only database adapter. The caller owns lifecycle cleanup
