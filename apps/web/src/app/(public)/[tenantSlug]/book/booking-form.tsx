@@ -71,7 +71,12 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
         </div>
       </fieldset>
 
-      <div aria-live="polite" className="booking-selection">
+      <div
+        aria-label="Your service"
+        aria-live="polite"
+        className="booking-selection"
+        role="status"
+      >
         <span className="booking-selection-label">Your service</span>
         <strong>{selectedService?.name ?? "Choose a service above"}</strong>
       </div>
@@ -126,7 +131,12 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
             "Request appointment"
           )}
         </button>
-        <p aria-live="polite" className="booking-submit-status" role="status">
+        <p
+          aria-label="Submission status"
+          aria-live="polite"
+          className="booking-submit-status"
+          role="status"
+        >
           {isSubmitting
             ? "Your appointment request is being submitted."
             : "No payment is taken now."}

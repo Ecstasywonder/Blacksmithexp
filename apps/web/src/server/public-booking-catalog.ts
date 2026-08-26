@@ -47,8 +47,9 @@ const syntheticCatalogs: Readonly<Record<string, PublicBookingCatalog>> = {
 
 export async function loadPublicBookingCatalog(tenantSlug: string) {
   if (
-    process.env.NODE_ENV !== "production" &&
-    process.env.CHAIRLY_E2E_CATALOG === "synthetic"
+    process.env.CHAIRLY_E2E_CATALOG === "synthetic" &&
+    (process.env.NODE_ENV !== "production" ||
+      process.env.CHAIRLY_E2E_PRODUCTION_BUILD === "true")
   ) {
     return syntheticCatalogs[tenantSlug.toLowerCase()] ?? null;
   }

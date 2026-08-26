@@ -24,10 +24,11 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port ${port}`,
+    command: `pnpm build && pnpm start --hostname 127.0.0.1 --port ${port}`,
     cwd: webAppDirectory,
     env: {
       CHAIRLY_E2E_CATALOG: "synthetic",
+      CHAIRLY_E2E_PRODUCTION_BUILD: "true",
     },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

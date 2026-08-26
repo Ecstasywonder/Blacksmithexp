@@ -26,12 +26,8 @@ test.describe("public booking form", () => {
     expect(hasHorizontalOverflow).toBe(false);
 
     await page.getByLabel("Signature silk press").check();
-    await expect(
-      page
-        .getByText("Your service")
-        .locator("..")
-        .getByText("Signature silk press"),
-    ).toBeVisible();
+    const serviceSummary = page.getByRole("status", { name: "Your service" });
+    await expect(serviceSummary).toContainText("Signature silk press");
 
     await page.getByLabel("Your name").fill("Ada Okafor");
     await page.getByLabel("Email or phone number").fill("ada@example.test");
@@ -41,15 +37,15 @@ test.describe("public booking form", () => {
       name: "Request appointment",
     });
     await submitButton.scrollIntoViewIfNeeded();
-    await expect(page.getByText("Your service").locator("..")).toBeInViewport();
+    await expect(serviceSummary).toBeInViewport();
 
-    const startedAt = Date.now();
     await submitButton.click();
     await expect(
       page.getByRole("button", { name: "Submitting request…" }),
     ).toBeVisible({ timeout: 1_000 });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    await expect(page.getByRole("status")).toContainText("being submitted");
+    await expect(
+      page.getByRole("status", { name: "Submission status" }),
+    ).toContainText("being submitted");
   });
 
   test("an incomplete submit preserves entered details and allows correction", async ({

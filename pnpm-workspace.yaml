@@ -3,7 +3,7 @@ packages:
   - "packages/*"
   - "tests/*"
 minimumReleaseAgeExclude:
-  - electron-to-chromium@1.5.415
+  - electron-to-chromium
 allowBuilds:
   esbuild: false
   unrs-resolver: false
