@@ -2,4 +2,8 @@ packages:
   - "apps/*"
   - "packages/*"
   - "tests/*"
-
+minimumReleaseAgeExclude:
+  - electron-to-chromium
+allowBuilds:
+  esbuild: false
+  unrs-resolver: false

@@ -8,7 +8,11 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
-  transpilePackages: ["@chairly/domain", "@chairly/shared"],
+  transpilePackages: [
+    "@chairly/database",
+    "@chairly/domain",
+    "@chairly/shared",
+  ],
 };
 
 export default nextConfig;
