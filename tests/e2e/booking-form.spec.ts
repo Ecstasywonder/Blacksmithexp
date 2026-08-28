@@ -69,6 +69,18 @@ test.describe("public booking form", () => {
         page.getByText("Enter your preferred time", { exact: true }),
       ).toBeVisible({ timeout: 1_000 }),
     ]);
+    await expect(
+      page.getByRole("textbox", { name: "Your name", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", {
+        name: "Email or phone number",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "Preferred time", exact: true }),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/luma-studio\/book$/);
     await expect(page.getByLabel("Signature silk press")).toBeFocused();
     await expect(

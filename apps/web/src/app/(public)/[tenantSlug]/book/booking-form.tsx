@@ -178,14 +178,15 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
         <p className="booking-help">
           Tell {businessName} how to reach you about this request.
         </p>
-        <label className="booking-input-group">
-          <span>Your name</span>
+        <div className="booking-input-group">
+          <label htmlFor="customerName">Your name</label>
           <input
             aria-describedby={
               errors.customerName ? "customerName-error" : undefined
             }
             aria-invalid={Boolean(errors.customerName)}
             autoComplete="name"
+            id="customerName"
             name="customerName"
             onChange={() => clearError("customerName")}
             placeholder="Ada Okafor"
@@ -201,15 +202,16 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
               {errors.customerName}
             </span>
           ) : null}
-        </label>
-        <label className="booking-input-group">
-          <span>Email or phone number</span>
+        </div>
+        <div className="booking-input-group">
+          <label htmlFor="contactDetail">Email or phone number</label>
           <input
             aria-describedby={
               errors.contactDetail ? "contactDetail-error" : undefined
             }
             aria-invalid={Boolean(errors.contactDetail)}
             autoComplete="email"
+            id="contactDetail"
             name="contactDetail"
             onChange={() => clearError("contactDetail")}
             placeholder="ada@example.com or +234 800 000 0000"
@@ -225,9 +227,9 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
               {errors.contactDetail}
             </span>
           ) : null}
-        </label>
-        <label className="booking-input-group">
-          <span>Preferred time</span>
+        </div>
+        <div className="booking-input-group">
+          <label htmlFor="preferredTime">Preferred time</label>
           <input
             aria-describedby={
               errors.preferredTime
@@ -236,6 +238,7 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
             }
             aria-invalid={Boolean(errors.preferredTime)}
             autoComplete="off"
+            id="preferredTime"
             inputMode="text"
             name="preferredTime"
             onChange={() => clearError("preferredTime")}
@@ -252,7 +255,7 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
               {errors.preferredTime}
             </span>
           ) : null}
-        </label>
+        </div>
         <p className="booking-time-note" id="preferredTime-note">
           Your preferred time is a request. {businessName} will confirm it with
           you.
