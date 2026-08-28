@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("public booking form", () => {
-  test("is usable on a phone and visibly begins a complete submission", async ({
+  test("is usable on a phone and submits a complete request", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -31,7 +31,7 @@ test.describe("public booking form", () => {
 
     await page.getByLabel("Your name").fill("Ada Okafor");
     await page.getByLabel("Email or phone number").fill("ada@example.test");
-    await page.getByLabel("Preferred time").fill("2026-09-03T10:30");
+    await page.getByLabel("Preferred time").fill("2033-09-03T10:30");
 
     const submitButton = page.getByRole("button", {
       name: "Request appointment",
@@ -41,11 +41,8 @@ test.describe("public booking form", () => {
 
     await submitButton.click();
     await expect(
-      page.getByRole("button", { name: "Submitting request…" }),
-    ).toBeVisible({ timeout: 1_000 });
-    await expect(
       page.getByRole("status", { name: "Submission status" }),
-    ).toContainText("being submitted");
+    ).toContainText("request was sent");
   });
 
   test("an incomplete submit preserves entered details and allows correction", async ({
@@ -65,11 +62,11 @@ test.describe("public booking form", () => {
 
     await page.getByLabel("Wash and treatment").check();
     await page.getByLabel("Email or phone number").fill("+234 801 234 5678");
-    await page.getByLabel("Preferred time").fill("2026-09-04T14:00");
+    await page.getByLabel("Preferred time").fill("2033-09-04T14:00");
     await page.getByRole("button", { name: "Request appointment" }).click();
     await expect(
-      page.getByRole("button", { name: "Submitting request…" }),
-    ).toBeVisible();
+      page.getByRole("status", { name: "Submission status" }),
+    ).toContainText("request was sent");
   });
 
   test("shows a clear message when the business has no published services", async ({

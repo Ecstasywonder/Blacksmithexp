@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 export type BookingFormService = {
   id: string;
@@ -13,25 +13,87 @@ export type BookingFormService = {
 type BookingFormProps = {
   businessName: string;
   services: BookingFormService[];
+  tenantSlug: string;
 };
 
-export function BookingForm({ businessName, services }: BookingFormProps) {
+type SubmissionState = "idle" | "submitting" | "success" | "error";
+
+const failureMessage = "We couldn't send your request. Please try again.";
+const appointmentRequestsChannel = "chairly-appointment-requests";
+const appointmentRequestSignalKey = "chairly:appointment-requested";
+
+export function BookingForm({
+  businessName,
+  services,
+  tenantSlug,
+}: BookingFormProps) {
   const [selectedServiceId, setSelectedServiceId] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionState, setSubmissionState] =
+    useState<SubmissionState>("idle");
+  const submissionIdentity = useRef<{ body: string; key: string } | null>(null);
+  const isSubmitting = submissionState === "submitting";
   const selectedService = services.find(
     (service) => service.id === selectedServiceId,
   );
 
-  function beginSubmission(event: FormEvent<HTMLFormElement>) {
+  async function submitRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIsSubmitting(true);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    setSubmissionState("submitting");
+
+    try {
+      const body = JSON.stringify({
+        serviceId: formData.get("serviceId"),
+        customerName: formData.get("customerName"),
+        contactDetail: formData.get("contactDetail"),
+        preferredTime: formData.get("preferredTime"),
+      });
+      if (submissionIdentity.current?.body !== body) {
+        submissionIdentity.current = {
+          body,
+          key: crypto.randomUUID(),
+        };
+      }
+
+      const response = await fetch(
+        `/api/public/${encodeURIComponent(tenantSlug)}/appointments`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": submissionIdentity.current.key,
+          },
+          body,
+        },
+      );
+
+      if (response.ok && typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel(appointmentRequestsChannel);
+        channel.postMessage({ tenantSlug });
+        channel.close();
+      }
+      if (response.ok) {
+        try {
+          window.localStorage.setItem(
+            appointmentRequestSignalKey,
+            JSON.stringify({ tenantSlug, nonce: crypto.randomUUID() }),
+          );
+        } catch {
+          // The dashboard also continues polling when storage is unavailable.
+        }
+      }
+      setSubmissionState(response.ok ? "success" : "error");
+    } catch {
+      setSubmissionState("error");
+    }
   }
 
   return (
     <form
       aria-label="Book an appointment"
       className="booking-form"
-      onSubmit={beginSubmission}
+      onSubmit={submitRequest}
     >
       <fieldset className="booking-fieldset">
         <legend>Choose a service</legend>
@@ -137,9 +199,13 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
           className="booking-submit-status"
           role="status"
         >
-          {isSubmitting
+          {submissionState === "submitting"
             ? "Your appointment request is being submitted."
-            : "No payment is taken now."}
+            : submissionState === "success"
+              ? "Your appointment request was sent."
+              : submissionState === "error"
+                ? failureMessage
+                : "No payment is taken now."}
         </p>
       </div>
     </form>

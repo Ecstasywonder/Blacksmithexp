@@ -84,6 +84,7 @@ export default async function BookingPage({ params }: BookingPageProps) {
         <BookingForm
           businessName={catalog.displayName}
           services={catalog.services.map(toBookingFormService)}
+          tenantSlug={tenantSlug}
         />
       )}
     </main>
