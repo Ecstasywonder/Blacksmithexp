@@ -31,7 +31,7 @@ test.describe("public booking form", () => {
 
     await page.getByLabel("Your name").fill("Ada Okafor");
     await page.getByLabel("Email or phone number").fill("ada@example.test");
-    await page.getByLabel("Preferred time").fill("2026-09-03T10:30");
+    await page.getByLabel("Preferred time").fill("10:30 AM");
 
     const submitButton = page.getByRole("button", {
       name: "Request appointment",
@@ -40,6 +40,7 @@ test.describe("public booking form", () => {
     await expect(serviceSummary).toBeInViewport();
 
     await submitButton.click();
+    await expect(page.locator(".booking-error")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Submitting request…" }),
     ).toBeVisible({ timeout: 1_000 });
@@ -48,28 +49,75 @@ test.describe("public booking form", () => {
     ).toContainText("being submitted");
   });
 
-  test("an incomplete submit preserves entered details and allows correction", async ({
+  test("shows all missing-field errors within one second and focuses the first invalid field", async ({
     page,
   }) => {
     await page.goto("/luma-studio/book");
-    const nameInput = page.getByLabel("Your name");
-
-    await nameInput.fill("Chidi Nwosu");
     await page.getByRole("button", { name: "Request appointment" }).click();
 
+    await Promise.all([
+      expect(
+        page.getByText("Choose a service to continue.", { exact: true }),
+      ).toBeVisible({ timeout: 1_000 }),
+      expect(page.getByText("Enter your name", { exact: true })).toBeVisible({
+        timeout: 1_000,
+      }),
+      expect(
+        page.getByText("Enter your contact detail", { exact: true }),
+      ).toBeVisible({ timeout: 1_000 }),
+      expect(
+        page.getByText("Enter your preferred time", { exact: true }),
+      ).toBeVisible({ timeout: 1_000 }),
+    ]);
+    await expect(
+      page.getByRole("textbox", { name: "Your name", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", {
+        name: "Email or phone number",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: "Preferred time", exact: true }),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/luma-studio\/book$/);
-    await expect(nameInput).toHaveValue("Chidi Nwosu");
+    await expect(page.getByLabel("Signature silk press")).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Request appointment" }),
+    ).toBeEnabled();
+    await expect(
+      page.getByRole("status", { name: "Submission status" }),
+    ).toContainText("No payment is taken now.");
+  });
+
+  test("rejects a malformed preferred time and submits after correction", async ({
+    page,
+  }) => {
+    await page.goto("/luma-studio/book");
+
+    await page.getByLabel("Wash and treatment").check();
+    await page.getByLabel("Your name").fill("Chidi Nwosu");
+    await page.getByLabel("Email or phone number").fill("+234 801 234 5678");
+    const preferredTime = page.getByLabel("Preferred time");
+    await preferredTime.fill("tomorrow-ish");
+    await page.getByRole("button", { name: "Request appointment" }).click();
+
+    await expect(
+      page.getByText("Enter a valid time, like 2:30 PM", { exact: true }),
+    ).toBeVisible({ timeout: 1_000 });
+    await expect(preferredTime).toBeFocused();
+    await expect(page).toHaveURL(/\/luma-studio\/book$/);
     await expect(
       page.getByRole("button", { name: "Request appointment" }),
     ).toBeEnabled();
 
-    await page.getByLabel("Wash and treatment").check();
-    await page.getByLabel("Email or phone number").fill("+234 801 234 5678");
-    await page.getByLabel("Preferred time").fill("2026-09-04T14:00");
+    await preferredTime.fill("2:30 PM");
     await page.getByRole("button", { name: "Request appointment" }).click();
     await expect(
       page.getByRole("button", { name: "Submitting request…" }),
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 1_000 });
+    await expect(page.locator(".booking-error")).toHaveCount(0);
   });
 
   test("shows a clear message when the business has no published services", async ({
