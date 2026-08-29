@@ -260,6 +260,10 @@ section p {
   gap: 12px;
 }
 
+.service-list[data-invalid="true"] .service-option {
+  border-color: #a61b1b;
+}
+
 .service-option {
   position: relative;
   display: grid;
@@ -421,8 +425,24 @@ section p {
   outline: 3px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+.booking-input-group input[aria-invalid="true"] {
+  border-color: #a61b1b;
+}
+
 .booking-input-group input::placeholder {
   color: #9a8e8b;
+}
+
+.booking-error {
+  margin: 10px 0 0;
+  color: #a61b1b;
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.booking-input-group .booking-error {
+  margin: 0;
 }
 
 .booking-time-note {

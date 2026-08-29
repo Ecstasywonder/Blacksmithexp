@@ -39,10 +39,16 @@ test.describe("pending appointment inbox", () => {
 
     await authenticateOwner(context, "luma-studio");
     const dashboard = await context.newPage();
+    const dashboardRefreshReady = dashboard.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/dashboard/pending-appointments") &&
+        response.ok(),
+    );
     await dashboard.goto("/dashboard/appointments");
     await expect(
       dashboard.getByRole("heading", { name: "Pending appointments" }),
     ).toBeVisible();
+    await dashboardRefreshReady;
 
     const booking = await context.newPage();
     await fillBooking(
