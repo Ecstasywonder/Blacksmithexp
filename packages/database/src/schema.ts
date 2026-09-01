@@ -433,6 +433,12 @@ export const appointments = pgTable(
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     timeZone: text("time_zone").notNull(),
     preferredTimeLocalSnapshot: text("preferred_time_local_snapshot").notNull(),
+    bufferBeforeMinutesSnapshot: integer("buffer_before_minutes_snapshot")
+      .notNull()
+      .default(0),
+    bufferAfterMinutesSnapshot: integer("buffer_after_minutes_snapshot")
+      .notNull()
+      .default(0),
     totalPriceMinor: bigint("total_price_minor", { mode: "number" }).notNull(),
     currency: text("currency").notNull(),
     customerNotes: text("customer_notes"),
@@ -463,7 +469,39 @@ export const appointments = pgTable(
       table.startsAt,
     ),
     check("appointments_range_ck", sql`${table.startsAt} < ${table.endsAt}`),
+    check(
+      "appointments_buffer_before_ck",
+      sql`${table.bufferBeforeMinutesSnapshot} >= 0`,
+    ),
+    check(
+      "appointments_buffer_after_ck",
+      sql`${table.bufferAfterMinutesSnapshot} >= 0`,
+    ),
     check("appointments_total_price_ck", sql`${table.totalPriceMinor} >= 0`),
+  ],
+);
+
+/** Global security counters contain only keyed hashes, never tenant or customer data. */
+export const publicEndpointRateLimits = pgTable(
+  "public_endpoint_rate_limits",
+  {
+    scopeHash: text("scope_hash").notNull(),
+    windowStartedAt: timestamp("window_started_at", {
+      withTimezone: true,
+    }).notNull(),
+    requestCount: integer("request_count").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.scopeHash, table.windowStartedAt] }),
+    check(
+      "public_endpoint_rate_limits_scope_ck",
+      sql`${table.scopeHash} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      "public_endpoint_rate_limits_count_ck",
+      sql`${table.requestCount} > 0`,
+    ),
   ],
 );
 

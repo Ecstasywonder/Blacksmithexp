@@ -4,6 +4,10 @@ import {
   type ErrorCode,
 } from "@chairly/shared";
 import { submitPublicAppointmentRequest } from "@/server/request-public-appointment";
+import {
+  allowPublicBookingRequest,
+  publicBookingRetryAfterSeconds,
+} from "@/server/public-booking-rate-limit";
 
 const failureMessage = "We couldn't send your request. Please try again.";
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,200}$/;
@@ -12,10 +16,15 @@ type PublicAppointmentRouteContext = {
   params: Promise<{ tenantSlug: string }>;
 };
 
-function errorResponse(status: number, code: ErrorCode, requestId: string) {
+function errorResponse(
+  status: number,
+  code: ErrorCode,
+  requestId: string,
+  headers?: HeadersInit,
+) {
   return Response.json(
     { error: { code, message: failureMessage, requestId } },
-    { status },
+    headers ? { status, headers } : { status },
   );
 }
 
@@ -24,6 +33,18 @@ export async function POST(
   { params }: PublicAppointmentRouteContext,
 ) {
   const requestId = randomUUID();
+  const { tenantSlug } = await params;
+  try {
+    if (!(await allowPublicBookingRequest(request, tenantSlug))) {
+      return errorResponse(429, "RATE_LIMITED", requestId, {
+        "retry-after": String(publicBookingRetryAfterSeconds),
+      });
+    }
+  } catch {
+    console.error("Public appointment rate limit failed", { requestId });
+    return errorResponse(500, "INTERNAL_ERROR", requestId);
+  }
+
   const idempotencyKey = request.headers.get("idempotency-key") ?? "";
   if (!idempotencyKeyPattern.test(idempotencyKey)) {
     return errorResponse(400, "VALIDATION_FAILED", requestId);
@@ -66,7 +87,6 @@ export async function POST(
   }
 
   try {
-    const { tenantSlug } = await params;
     const result = await submitPublicAppointmentRequest(
       tenantSlug,
       parsed.data,

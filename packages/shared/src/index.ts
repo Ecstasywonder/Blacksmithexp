@@ -57,6 +57,7 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "BOOKING_SLOT_UNAVAILABLE"
   | "IDEMPOTENCY_CONFLICT"
+  | "RATE_LIMITED"
   | "INTERNAL_ERROR";
 
 export type AppError = Readonly<{

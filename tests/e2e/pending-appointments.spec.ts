@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 const appUrl = "http://127.0.0.1:3210";
 
@@ -78,6 +79,8 @@ test.describe("pending appointment inbox", () => {
     await expect(
       requestCard.getByRole("button", { name: /confirm|decline/i }),
     ).toHaveCount(0);
+    const accessibility = await new AxeBuilder({ page: dashboard }).analyze();
+    expect(accessibility.violations).toEqual([]);
   });
 
   test("replays the same booking request without creating a duplicate", async ({
@@ -156,43 +159,52 @@ test.describe("pending appointment inbox", () => {
         authenticateOwner(contextA, "luma-studio"),
         authenticateOwner(contextB, "ember-studio"),
       ]);
-      const [dashboardA, dashboardB, bookingA, bookingB] = await Promise.all([
-        contextA.newPage(),
-        contextB.newPage(),
+      const [dashboardA, dashboardB] = await Promise.all([
         contextA.newPage(),
         contextB.newPage(),
       ]);
+      const dashboardAReady = dashboardA.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/dashboard/pending-appointments") &&
+          response.ok(),
+      );
+      const dashboardBReady = dashboardB.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/dashboard/pending-appointments") &&
+          response.ok(),
+      );
       await Promise.all([
         dashboardA.goto("/dashboard/appointments"),
         dashboardB.goto("/dashboard/appointments"),
-        fillBooking(
-          bookingA,
-          "luma-studio",
-          customerName,
-          customerContact,
-          preferredTime,
-        ),
-        fillBooking(
-          bookingB,
-          "ember-studio",
-          customerName,
-          customerContact,
-          preferredTime,
-        ),
       ]);
+      await Promise.all([dashboardAReady, dashboardBReady]);
 
-      await Promise.all([
-        bookingA.getByRole("button", { name: "Request appointment" }).click(),
-        bookingB.getByRole("button", { name: "Request appointment" }).click(),
+      const [responseA, responseB] = await Promise.all([
+        contextA.request.post(`${appUrl}/api/public/luma-studio/appointments`, {
+          data: {
+            serviceId: "20000000-0000-4000-8000-000000000001",
+            customerName,
+            contactDetail: customerContact,
+            preferredTime,
+          },
+          headers: { "idempotency-key": crypto.randomUUID() },
+        }),
+        contextB.request.post(
+          `${appUrl}/api/public/ember-studio/appointments`,
+          {
+            data: {
+              serviceId: "20000000-0000-4000-8000-000000000004",
+              customerName,
+              contactDetail: customerContact,
+              preferredTime,
+            },
+            headers: { "idempotency-key": crypto.randomUUID() },
+          },
+        ),
       ]);
-      await Promise.all([
-        expect(
-          bookingA.getByRole("status", { name: "Submission status" }),
-        ).toContainText("request was sent"),
-        expect(
-          bookingB.getByRole("status", { name: "Submission status" }),
-        ).toContainText("request was sent"),
-      ]);
+      expect(responseA.status()).toBe(201);
+      expect(responseB.status()).toBe(201);
+      const acceptedAt = Date.now();
 
       const matchingA = dashboardA
         .getByRole("listitem")
@@ -202,6 +214,7 @@ test.describe("pending appointment inbox", () => {
         .filter({ hasText: customerName });
       await expect(matchingA).toHaveCount(1, { timeout: 2_000 });
       await expect(matchingB).toHaveCount(1, { timeout: 2_000 });
+      expect(Date.now() - acceptedAt).toBeLessThan(2_000);
       await expect(dashboardA.getByText("Luma Studio")).toBeVisible();
       await expect(dashboardB.getByText("Ember Studio")).toBeVisible();
     } finally {

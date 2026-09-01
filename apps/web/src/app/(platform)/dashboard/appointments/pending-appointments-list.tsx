@@ -70,9 +70,10 @@ export function PendingAppointmentsList({
 
   useEffect(() => {
     let stopped = false;
-    let timeout: number | undefined;
+    let refreshInFlight: Promise<void> | null = null;
+    let refreshQueued = false;
 
-    async function refresh() {
+    async function performRefresh() {
       try {
         const response = await fetch("/api/dashboard/pending-appointments", {
           cache: "no-store",
@@ -84,7 +85,8 @@ export function PendingAppointmentsList({
           payload !== null &&
           "appointments" in payload &&
           Array.isArray(payload.appointments) &&
-          payload.appointments.every(isPendingAppointment)
+          payload.appointments.every(isPendingAppointment) &&
+          !stopped
         ) {
           setAppointments(payload.appointments);
         }
@@ -93,12 +95,20 @@ export function PendingAppointmentsList({
       }
     }
 
-    async function poll() {
-      await refresh();
-
-      if (!stopped) {
-        timeout = window.setTimeout(poll, 500);
+    function refresh() {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return refreshInFlight;
       }
+
+      refreshInFlight = performRefresh().finally(() => {
+        refreshInFlight = null;
+        if (refreshQueued && !stopped) {
+          refreshQueued = false;
+          void refresh();
+        }
+      });
+      return refreshInFlight;
     }
 
     const channel =
@@ -136,15 +146,14 @@ export function PendingAppointmentsList({
     } catch {
       // Polling still works when browser storage is unavailable.
     }
-    void poll();
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 250);
 
     return () => {
       stopped = true;
       channel?.close();
       window.removeEventListener("storage", handleStorage);
-      if (timeout !== undefined) {
-        window.clearTimeout(timeout);
-      }
+      window.clearInterval(interval);
     };
   }, [tenantSlug]);
 

@@ -14,6 +14,8 @@ export {
   type OwnerPendingAppointments,
   type PendingAppointment,
 } from "./appointments";
+export { resolveOwnerIdentity, type OwnerIdentity } from "./owner-identity";
+export { consumePublicBookingRateLimit } from "./public-rate-limit";
 
 /**
  * Creates the server-only database adapter. The caller owns lifecycle cleanup

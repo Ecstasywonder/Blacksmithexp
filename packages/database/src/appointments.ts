@@ -20,12 +20,29 @@ type AssignmentRow = {
   serviceId: string;
   serviceName: string;
   durationMinutes: number;
+  bufferBeforeMinutes: number;
+  bufferAfterMinutes: number;
   priceMinor: number;
   currency: string;
   locationId: string;
   timeZone: string;
   staffId: string;
+  slotIntervalMinutes: number;
+  minimumLeadMinutes: number;
+  bookingHorizonDays: number;
 };
+
+type AssignmentSelection =
+  | Readonly<{
+      ok: true;
+      assignment: AssignmentRow;
+      startsAt: Date;
+      endsAt: Date;
+    }>
+  | Readonly<{
+      ok: false;
+      reason: "invalid_preferred_time" | "slot_unavailable";
+    }>;
 
 type PendingAppointmentRow = {
   id: string;
@@ -159,6 +176,149 @@ async function resolvePublishedTenant(
   return rows[0]?.tenantId ?? null;
 }
 
+async function selectAvailableAssignment(
+  transaction: TenantTransaction,
+  tenantId: string,
+  command: RequestAppointmentCommand,
+  assignments: readonly AssignmentRow[],
+): Promise<AssignmentSelection> {
+  let hasValidPreferredTime = false;
+
+  for (const assignment of assignments) {
+    const preferredTimes = await transaction.execute<{
+      startsAt: Date;
+      roundTrip: string;
+      meetsLeadTime: boolean;
+      withinHorizon: boolean;
+      alignsToSlot: boolean;
+    }>(sql`
+      select
+        (${command.preferredTime}::timestamp at time zone ${assignment.timeZone}) as "startsAt",
+        to_char(
+          (${command.preferredTime}::timestamp at time zone ${assignment.timeZone})
+            at time zone ${assignment.timeZone},
+          'YYYY-MM-DD"T"HH24:MI'
+        ) as "roundTrip",
+        (${command.preferredTime}::timestamp at time zone ${assignment.timeZone})
+          >= statement_timestamp() + make_interval(mins => ${assignment.minimumLeadMinutes})
+          as "meetsLeadTime",
+        (${command.preferredTime}::timestamp at time zone ${assignment.timeZone})
+          <= statement_timestamp() + make_interval(days => ${assignment.bookingHorizonDays})
+          as "withinHorizon",
+        mod(
+          extract(hour from ${command.preferredTime}::timestamp)::integer * 60
+            + extract(minute from ${command.preferredTime}::timestamp)::integer,
+          ${assignment.slotIntervalMinutes}
+        ) = 0 as "alignsToSlot"
+    `);
+    const preferred = preferredTimes[0];
+    if (
+      !preferred ||
+      preferred.roundTrip !== command.preferredTime ||
+      !preferred.meetsLeadTime ||
+      !preferred.withinHorizon ||
+      !preferred.alignsToSlot
+    ) {
+      continue;
+    }
+    hasValidPreferredTime = true;
+
+    const endsAt = new Date(
+      preferred.startsAt.getTime() + assignment.durationMinutes * 60_000,
+    );
+    const bufferedStartsAt = new Date(
+      preferred.startsAt.getTime() - assignment.bufferBeforeMinutes * 60_000,
+    );
+    const bufferedEndsAt = new Date(
+      endsAt.getTime() + assignment.bufferAfterMinutes * 60_000,
+    );
+
+    const availabilityRows = await transaction.execute<{
+      isAvailable: boolean;
+    }>(sql`
+      select (
+        (
+          exists (
+            select 1
+            from weekly_availability
+            where tenant_id = ${tenantId}
+              and location_id = ${assignment.locationId}
+              and (staff_id is null or staff_id = ${assignment.staffId})
+              and day_of_week = extract(dow from ${command.preferredTime}::timestamp)::integer
+              and ${command.preferredTime}::timestamp
+                    - make_interval(mins => ${assignment.bufferBeforeMinutes})
+                  >= date_trunc('day', ${command.preferredTime}::timestamp) + starts_local_at
+              and ${command.preferredTime}::timestamp
+                    + make_interval(
+                        mins => ${assignment.durationMinutes + assignment.bufferAfterMinutes}
+                      )
+                  <= date_trunc('day', ${command.preferredTime}::timestamp) + ends_local_at
+          )
+          or exists (
+            select 1
+            from availability_exceptions
+            where tenant_id = ${tenantId}
+              and location_id = ${assignment.locationId}
+              and (staff_id is null or staff_id = ${assignment.staffId})
+              and kind = 'available'
+              and starts_at <= ${bufferedStartsAt}
+              and ends_at >= ${bufferedEndsAt}
+          )
+        )
+        and not exists (
+          select 1
+          from availability_exceptions
+          where tenant_id = ${tenantId}
+            and location_id = ${assignment.locationId}
+            and (staff_id is null or staff_id = ${assignment.staffId})
+            and kind = 'closed'
+            and starts_at < ${bufferedEndsAt}
+            and ends_at > ${bufferedStartsAt}
+        )
+      ) as "isAvailable"
+    `);
+    if (availabilityRows[0]?.isAvailable !== true) {
+      continue;
+    }
+
+    // Consistent lock ordering serializes claims for this staff member before
+    // the transactional recheck. The exclusion constraint remains the final
+    // authority if another writer bypasses this repository.
+    await transaction.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${assignment.staffId}, 0))`,
+    );
+    const conflicts = await transaction.execute<{ id: string }>(sql`
+      select id
+      from appointments
+      where tenant_id = ${tenantId}
+        and staff_id = ${assignment.staffId}
+        and status in ('pending', 'confirmed')
+        and starts_at
+              - buffer_before_minutes_snapshot * interval '1 minute'
+            < ${bufferedEndsAt}
+        and ends_at
+              + buffer_after_minutes_snapshot * interval '1 minute'
+            > ${bufferedStartsAt}
+      limit 1
+    `);
+    if (conflicts.length === 0) {
+      return {
+        ok: true,
+        assignment,
+        startsAt: preferred.startsAt,
+        endsAt,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    reason: hasValidPreferredTime
+      ? "slot_unavailable"
+      : "invalid_preferred_time",
+  };
+}
+
 export class PostgresAppointmentRequestRepository implements AppointmentRequestRepository {
   constructor(private readonly database: Database) {}
 
@@ -228,12 +388,19 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               service.id as "serviceId",
               service.name as "serviceName",
               service.duration_minutes as "durationMinutes",
+              service.buffer_before_minutes as "bufferBeforeMinutes",
+              service.buffer_after_minutes as "bufferAfterMinutes",
               service.price_minor as "priceMinor",
               service.currency,
               location.id as "locationId",
               location.time_zone as "timeZone",
-              staff.id as "staffId"
+              staff.id as "staffId",
+              coalesce(setting.slot_interval_minutes, 15) as "slotIntervalMinutes",
+              coalesce(setting.minimum_lead_minutes, 60) as "minimumLeadMinutes",
+              coalesce(setting.booking_horizon_days, 90) as "bookingHorizonDays"
             from tenants as tenant
+            left join booking_settings as setting
+              on setting.tenant_id = tenant.id
             join services as service
               on service.tenant_id = tenant.id
             join service_locations as service_location
@@ -261,11 +428,9 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               and staff.is_active = true
               and staff.archived_at is null
             order by location.is_primary desc, location.id, staff.id
-            limit 1
           `);
-          const assignment = assignments[0];
 
-          if (!assignment) {
+          if (assignments.length === 0) {
             const serviceRows = await transaction.execute<{ exists: boolean }>(
               sql`
                 select exists(
@@ -285,39 +450,16 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
             });
           }
 
-          const preferredTimes = await transaction.execute<{
-            startsAt: Date;
-            roundTrip: string;
-          }>(sql`
-            select
-              (${command.preferredTime}::timestamp at time zone ${assignment.timeZone}) as "startsAt",
-              to_char(
-                (${command.preferredTime}::timestamp at time zone ${assignment.timeZone})
-                  at time zone ${assignment.timeZone},
-                'YYYY-MM-DD"T"HH24:MI'
-              ) as "roundTrip"
-          `);
-          const preferred = preferredTimes[0];
-          if (!preferred || preferred.roundTrip !== command.preferredTime) {
-            return complete({ ok: false, reason: "invalid_preferred_time" });
-          }
-
-          const endsAt = new Date(
-            preferred.startsAt.getTime() + assignment.durationMinutes * 60_000,
+          const selected = await selectAvailableAssignment(
+            transaction,
+            tenantId,
+            command,
+            assignments,
           );
-          const conflicts = await transaction.execute<{ id: string }>(sql`
-            select id
-            from appointments
-            where tenant_id = ${tenantId}
-              and staff_id = ${assignment.staffId}
-              and status in ('pending', 'confirmed')
-              and starts_at < ${endsAt}
-              and ends_at > ${preferred.startsAt}
-            limit 1
-          `);
-          if (conflicts.length > 0) {
-            return complete({ ok: false, reason: "slot_unavailable" });
+          if (!selected.ok) {
+            return complete({ ok: false, reason: selected.reason });
           }
+          const { assignment, startsAt, endsAt } = selected;
 
           const isEmail = emailPattern.test(command.contactDetail);
           const customerRows = isEmail
@@ -363,6 +505,8 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               ends_at,
               time_zone,
               preferred_time_local_snapshot,
+              buffer_before_minutes_snapshot,
+              buffer_after_minutes_snapshot,
               total_price_minor,
               currency,
               policy_version
@@ -376,10 +520,12 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               ${command.contactDetail},
               'pending',
               'public_web',
-              ${preferred.startsAt},
+              ${startsAt},
               ${endsAt},
               ${assignment.timeZone},
               ${command.preferredTime},
+              ${assignment.bufferBeforeMinutes},
+              ${assignment.bufferAfterMinutes},
               ${assignment.priceMinor},
               ${assignment.currency},
               ${assignment.policyVersion}

@@ -13,7 +13,18 @@ const dashboardSessionSchema = z.object({
 
 export type DashboardSession = z.infer<typeof dashboardSessionSchema>;
 
-const sessionCookieName = "chairly_session";
+const oidcFlowSchema = z.object({
+  state: z.string().min(32).max(200),
+  nonce: z.string().min(32).max(200),
+  verifier: z.string().min(43).max(128),
+  returnTo: z.string().startsWith("/dashboard"),
+  expiresAt: z.number().int().positive(),
+});
+
+export type OidcFlow = z.infer<typeof oidcFlowSchema>;
+
+export const dashboardSessionCookieName = "chairly_session";
+export const oidcFlowCookieName = "chairly_oidc_flow";
 const syntheticTenantCookieName = "chairly_e2e_tenant_slug";
 
 function sessionSecret(): string | null {
@@ -25,19 +36,18 @@ function sign(payload: string, secret: string): Buffer {
   return createHmac("sha256", secret).update(payload).digest();
 }
 
-/** Used by the OIDC callback adapter when it establishes a selected tenant. */
-export function createDashboardSessionValue(session: DashboardSession): string {
+function createSignedValue<T>(value: T, schema: z.ZodType<T>): string {
   const secret = sessionSecret();
   if (!secret) {
     throw new Error("AUTH_SESSION_SECRET must contain at least 32 characters");
   }
 
-  const parsed = dashboardSessionSchema.parse(session);
+  const parsed = schema.parse(value);
   const payload = Buffer.from(JSON.stringify(parsed)).toString("base64url");
   return `${payload}.${sign(payload, secret).toString("base64url")}`;
 }
 
-function verifyDashboardSession(value: string): DashboardSession | null {
+function verifySignedValue<T>(value: string, schema: z.ZodType<T>): T | null {
   const secret = sessionSecret();
   const [payload, signature, extra] = value.split(".");
   if (!secret || !payload || !signature || extra) {
@@ -54,16 +64,32 @@ function verifyDashboardSession(value: string): DashboardSession | null {
   }
 
   try {
-    const parsed = dashboardSessionSchema.safeParse(
+    const parsed = schema.safeParse(
       JSON.parse(Buffer.from(payload, "base64url").toString("utf8")),
     );
-    if (!parsed.success || parsed.data.expiresAt <= Date.now()) {
-      return null;
-    }
-    return parsed.data;
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
+}
+
+/** Used by the OIDC callback adapter when it establishes a selected tenant. */
+export function createDashboardSessionValue(session: DashboardSession): string {
+  return createSignedValue(session, dashboardSessionSchema);
+}
+
+function verifyDashboardSession(value: string): DashboardSession | null {
+  const session = verifySignedValue(value, dashboardSessionSchema);
+  return session && session.expiresAt > Date.now() ? session : null;
+}
+
+export function createOidcFlowValue(flow: OidcFlow): string {
+  return createSignedValue(flow, oidcFlowSchema);
+}
+
+export function verifyOidcFlowValue(value: string): OidcFlow | null {
+  const flow = verifySignedValue(value, oidcFlowSchema);
+  return flow && flow.expiresAt > Date.now() ? flow : null;
 }
 
 export type DashboardIdentity =
@@ -78,7 +104,7 @@ export async function getDashboardIdentity(): Promise<DashboardIdentity | null> 
     return tenantSlug ? { kind: "synthetic", tenantSlug } : null;
   }
 
-  const sessionValue = cookieStore.get(sessionCookieName)?.value;
+  const sessionValue = cookieStore.get(dashboardSessionCookieName)?.value;
   if (!sessionValue) {
     return null;
   }

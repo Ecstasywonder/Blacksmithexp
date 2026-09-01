@@ -7,6 +7,7 @@ import {
   createDatabase,
   getOwnerPendingAppointments,
   PostgresAppointmentRequestRepository,
+  resolveOwnerIdentity,
 } from "./index";
 
 const migrationDatabaseUrl = process.env.MIGRATION_DATABASE_URL;
@@ -14,6 +15,18 @@ const runtimeDatabaseUrl = process.env.DATABASE_URL;
 const hasDatabaseEnvironment = Boolean(
   migrationDatabaseUrl && runtimeDatabaseUrl,
 );
+
+function futureLocalDate(daysFromNow: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + daysFromNow);
+  return date.toISOString().slice(0, 10);
+}
+
+function secondSundayInMarch(year: number): number {
+  const firstDay = new Date(Date.UTC(year, 2, 1)).getUTCDay();
+  const firstSunday = 1 + ((7 - firstDay) % 7);
+  return firstSunday + 7;
+}
 
 test(
   "appointment requests are atomically created and isolated by resolved tenant",
@@ -41,6 +54,7 @@ test(
         serviceId: randomUUID(),
         locationId: randomUUID(),
         staffId: randomUUID(),
+        timeZone: "Africa/Lagos",
       },
       {
         id: randomUUID(),
@@ -50,6 +64,7 @@ test(
         serviceId: randomUUID(),
         locationId: randomUUID(),
         staffId: randomUUID(),
+        timeZone: "America/New_York",
       },
     ] as const;
 
@@ -62,12 +77,15 @@ test(
         await transaction`delete from appointment_services where tenant_id = ${tenantId}`;
         await transaction`delete from appointments where tenant_id = ${tenantId}`;
         await transaction`delete from customers where tenant_id = ${tenantId}`;
+        await transaction`delete from availability_exceptions where tenant_id = ${tenantId}`;
+        await transaction`delete from weekly_availability where tenant_id = ${tenantId}`;
         await transaction`delete from staff_services where tenant_id = ${tenantId}`;
         await transaction`delete from service_locations where tenant_id = ${tenantId}`;
         await transaction`delete from services where tenant_id = ${tenantId}`;
         await transaction`delete from staff_members where tenant_id = ${tenantId}`;
         await transaction`delete from locations where tenant_id = ${tenantId}`;
         await transaction`delete from tenant_members where tenant_id = ${tenantId}`;
+        await transaction`delete from booking_settings where tenant_id = ${tenantId}`;
         await transaction`delete from tenants where id = ${tenantId}`;
       });
     }
@@ -112,6 +130,14 @@ test(
             values (${tenant.id}, ${tenant.ownerId}, 'owner', 'active', now())
           `;
           await transaction`
+            insert into booking_settings (
+              tenant_id,
+              slot_interval_minutes,
+              minimum_lead_minutes,
+              booking_horizon_days
+            ) values (${tenant.id}, 5, 0, 730)
+          `;
+          await transaction`
             insert into locations (
               id,
               tenant_id,
@@ -129,7 +155,7 @@ test(
               'Synthetic address',
               'Lagos',
               'NG',
-              'Africa/Lagos',
+              ${tenant.timeZone},
               true,
               true
             )
@@ -145,6 +171,8 @@ test(
               tenant_id,
               name,
               duration_minutes,
+              buffer_before_minutes,
+              buffer_after_minutes,
               price_minor,
               currency,
               is_active
@@ -153,6 +181,8 @@ test(
               ${tenant.id},
               'Identical service',
               60,
+              15,
+              15,
               2500000,
               'NGN',
               true
@@ -166,15 +196,50 @@ test(
             insert into staff_services (tenant_id, staff_id, service_id)
             values (${tenant.id}, ${tenant.staffId}, ${tenant.serviceId})
           `;
+          await transaction`
+            insert into weekly_availability (
+              tenant_id,
+              location_id,
+              staff_id,
+              day_of_week,
+              starts_local_at,
+              ends_local_at
+            )
+            select
+              ${tenant.id},
+              ${tenant.locationId},
+              ${tenant.staffId},
+              day_of_week,
+              time '08:00',
+              time '18:00'
+            from generate_series(0, 6) as day_of_week
+          `;
         });
       }
 
       const [tenantA, tenantB] = tenants;
+      assert.deepEqual(
+        await resolveOwnerIdentity(
+          runtime.db,
+          "appointments-integration-test",
+          tenantA.ownerId,
+        ),
+        { userId: tenantA.ownerId, tenantId: tenantA.id },
+      );
+      assert.equal(
+        await resolveOwnerIdentity(
+          runtime.db,
+          "appointments-integration-test",
+          randomUUID(),
+        ),
+        null,
+      );
       const tenantAIdempotencyKey = randomUUID();
+      const appointmentDate = futureLocalDate(30);
       const identicalCustomer = {
         customerName: "  Ada Okafor  ",
         contactDetail: "Ada@Example.test",
-        preferredTime: "2031-09-03T10:30",
+        preferredTime: `${appointmentDate}T10:30`,
       };
       const [resultA, resultB] = await Promise.all([
         requestAppointment(repository, {
@@ -237,7 +302,7 @@ test(
         [
           {
             service: "Identical service",
-            preferredTime: "2031-09-03T10:30",
+            preferredTime: `${appointmentDate}T10:30`,
             customerName: "  Ada Okafor  ",
             customerContact: "Ada@Example.test",
             status: "pending",
@@ -262,13 +327,140 @@ test(
         serviceId: tenantA.serviceId,
         customerName: "No owner",
         contactDetail: "nobody@example.test",
-        preferredTime: "2031-09-03T12:30",
+        preferredTime: `${appointmentDate}T12:30`,
         idempotencyKey: randomUUID(),
         requestId: randomUUID(),
       });
       assert.deepEqual(unknownTenantResult, {
         ok: false,
         reason: "tenant_not_found",
+      });
+
+      for (const preferredTime of [
+        `${futureLocalDate(-1)}T10:30`,
+        `${futureLocalDate(731)}T10:30`,
+      ]) {
+        const policyFailure = await requestAppointment(repository, {
+          tenantSlug: tenantA.slug,
+          serviceId: tenantA.serviceId,
+          customerName: "Policy boundary",
+          contactDetail: `policy-${randomUUID()}@example.test`,
+          preferredTime,
+          idempotencyKey: randomUUID(),
+          requestId: randomUUID(),
+        });
+        assert.deepEqual(policyFailure, {
+          ok: false,
+          reason: "invalid_preferred_time",
+        });
+      }
+
+      const outsideWeeklyHours = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Outside hours",
+        contactDetail: "outside-hours@example.test",
+        preferredTime: `${appointmentDate}T19:00`,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(outsideWeeklyHours, {
+        ok: false,
+        reason: "slot_unavailable",
+      });
+
+      await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        await transaction`
+          insert into availability_exceptions (
+            tenant_id,
+            location_id,
+            staff_id,
+            kind,
+            starts_at,
+            ends_at
+          ) values (
+            ${tenantA.id},
+            ${tenantA.locationId},
+            ${tenantA.staffId},
+            'available',
+            (${`${appointmentDate}T18:30`}::timestamp at time zone 'Africa/Lagos'),
+            (${`${appointmentDate}T20:30`}::timestamp at time zone 'Africa/Lagos')
+          )
+        `;
+      });
+      const availableException = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Available exception",
+        contactDetail: "available-exception@example.test",
+        preferredTime: `${appointmentDate}T19:00`,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.equal(availableException.ok, true);
+
+      const bufferConflict = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Buffer conflict",
+        contactDetail: "buffer-conflict@example.test",
+        preferredTime: `${appointmentDate}T11:35`,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(bufferConflict, {
+        ok: false,
+        reason: "slot_unavailable",
+      });
+
+      await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        await transaction`
+          insert into availability_exceptions (
+            tenant_id,
+            location_id,
+            staff_id,
+            kind,
+            starts_at,
+            ends_at
+          ) values (
+            ${tenantA.id},
+            ${tenantA.locationId},
+            ${tenantA.staffId},
+            'closed',
+            (${`${appointmentDate}T12:00`}::timestamp at time zone 'Africa/Lagos'),
+            (${`${appointmentDate}T13:30`}::timestamp at time zone 'Africa/Lagos')
+          )
+        `;
+      });
+      const closedException = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Closed exception",
+        contactDetail: "closed-exception@example.test",
+        preferredTime: `${appointmentDate}T12:30`,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(closedException, {
+        ok: false,
+        reason: "slot_unavailable",
+      });
+
+      const dstYear = new Date().getUTCFullYear() + 1;
+      const dstGap = await requestAppointment(repository, {
+        tenantSlug: tenantB.slug,
+        serviceId: tenantB.serviceId,
+        customerName: "DST gap",
+        contactDetail: "dst-gap@example.test",
+        preferredTime: `${dstYear}-03-${String(secondSundayInMarch(dstYear)).padStart(2, "0")}T02:30`,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(dstGap, {
+        ok: false,
+        reason: "invalid_preferred_time",
       });
 
       const racingCommands = ["First Racer", "Second Racer"].map(
@@ -278,7 +470,7 @@ test(
             serviceId: tenantA.serviceId,
             customerName,
             contactDetail: `${customerName.replace(" ", ".")}@example.test`,
-            preferredTime: "2031-09-03T14:00",
+            preferredTime: `${appointmentDate}T14:00`,
             idempotencyKey: randomUUID(),
             requestId: randomUUID(),
           }),
@@ -310,10 +502,10 @@ test(
           `;
       });
       assert.deepEqual(aggregateCounts[0], {
-        appointments: 2,
-        events: 2,
-        audits: 2,
-        outbox: 2,
+        appointments: 3,
+        events: 3,
+        audits: 3,
+        outbox: 3,
       });
     } finally {
       for (const tenant of tenants) {
