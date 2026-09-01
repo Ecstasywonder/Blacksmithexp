@@ -77,6 +77,7 @@ test(
         await transaction`delete from appointment_services where tenant_id = ${tenantId}`;
         await transaction`delete from appointments where tenant_id = ${tenantId}`;
         await transaction`delete from customers where tenant_id = ${tenantId}`;
+        await transaction`delete from idempotency_keys where tenant_id = ${tenantId}`;
         await transaction`delete from availability_exceptions where tenant_id = ${tenantId}`;
         await transaction`delete from weekly_availability where tenant_id = ${tenantId}`;
         await transaction`delete from staff_services where tenant_id = ${tenantId}`;
@@ -269,6 +270,55 @@ test(
         requestId: randomUUID(),
       });
       assert.deepEqual(replayA, resultA);
+
+      const unrelatedExpiredKey = randomUUID();
+      await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        await transaction`
+          update idempotency_keys
+          set expires_at = now() - interval '1 minute'
+          where tenant_id = ${tenantA.id}
+            and key = ${tenantAIdempotencyKey}
+        `;
+        await transaction`
+          insert into idempotency_keys (
+            tenant_id,
+            key,
+            request_hash,
+            response_status,
+            response_body,
+            expires_at
+          ) values (
+            ${tenantA.id},
+            ${unrelatedExpiredKey},
+            'expired-test-hash',
+            409,
+            '{"ok":false,"reason":"slot_unavailable"}'::jsonb,
+            now() - interval '2 days'
+          )
+        `;
+      });
+      const expiredRetry = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        ...identicalCustomer,
+        idempotencyKey: tenantAIdempotencyKey,
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(expiredRetry, {
+        ok: false,
+        reason: "slot_unavailable",
+      });
+      const expiredRows = await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        return transaction<{ count: number }[]>`
+          select count(*)::int as count
+          from idempotency_keys
+          where tenant_id = ${tenantA.id}
+            and key = ${unrelatedExpiredKey}
+        `;
+      });
+      assert.equal(expiredRows[0]?.count, 0);
 
       const mismatchedReplay = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,

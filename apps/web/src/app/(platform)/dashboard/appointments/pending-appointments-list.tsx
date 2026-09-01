@@ -19,6 +19,7 @@ type PendingAppointmentsListProps = {
 
 const appointmentRequestsChannel = "chairly-appointment-requests";
 const appointmentRequestSignalKey = "chairly:appointment-requested";
+const fallbackRefreshIntervalMs = 2_000;
 
 function signalMatchesTenant(
   value: string | null,
@@ -147,12 +148,23 @@ export function PendingAppointmentsList({
       // Polling still works when browser storage is unavailable.
     }
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 250);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    }, fallbackRefreshIntervalMs);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       stopped = true;
       channel?.close();
       window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.clearInterval(interval);
     };
   }, [tenantSlug]);

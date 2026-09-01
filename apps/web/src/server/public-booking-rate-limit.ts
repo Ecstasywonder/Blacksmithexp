@@ -7,6 +7,8 @@ import { isSyntheticBookingEnvironment } from "./public-booking-catalog";
 
 const maxRequests = 20;
 const windowSeconds = 60;
+const untrustedClientScope = "untrusted-client";
+const syntheticClientHeader = "x-chairly-test-client-id";
 
 const syntheticState = globalThis as typeof globalThis & {
   chairlySyntheticPublicRateLimits?: Map<
@@ -15,14 +17,28 @@ const syntheticState = globalThis as typeof globalThis & {
   >;
 };
 
-function clientAddress(request: Request): string {
-  const forwarded = (
-    request.headers.get("x-vercel-forwarded-for") ??
-    request.headers.get("x-forwarded-for")
-  )
-    ?.split(",", 1)[0]
-    ?.trim();
-  return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
+export function trustedRateLimitClientAddress(request: Request): string {
+  // Vercel overwrites its forwarding header at the edge, but ordinary
+  // forwarded-IP headers are attacker-controlled on an unverified runtime.
+  // Falling back to one shared scope is deliberately conservative: it may
+  // reduce availability on a misconfigured host, but it cannot be bypassed by
+  // rotating a browser-supplied header.
+  if (process.env.VERCEL === "1") {
+    const vercelAddress = request.headers
+      .get("x-vercel-forwarded-for")
+      ?.split(",")
+      .at(-1)
+      ?.trim();
+    if (vercelAddress) {
+      return vercelAddress;
+    }
+  }
+
+  return untrustedClientScope;
+}
+
+function syntheticClientIdentity(request: Request): string {
+  return request.headers.get(syntheticClientHeader)?.trim() || "synthetic";
 }
 
 function rateLimitSecret(): string {
@@ -35,14 +51,16 @@ function rateLimitSecret(): string {
 
 function scopeHash(request: Request, tenantSlug: string): string {
   return createHmac("sha256", rateLimitSecret())
-    .update(`${tenantSlug.trim().toLowerCase()}\0${clientAddress(request)}`)
+    .update(
+      `${tenantSlug.trim().toLowerCase()}\0${trustedRateLimitClientAddress(request)}`,
+    )
     .digest("hex");
 }
 
 function consumeSyntheticRateLimit(request: Request, tenantSlug: string) {
   syntheticState.chairlySyntheticPublicRateLimits ??= new Map();
   const limits = syntheticState.chairlySyntheticPublicRateLimits;
-  const key = `${tenantSlug.trim().toLowerCase()}\0${clientAddress(request)}`;
+  const key = `${tenantSlug.trim().toLowerCase()}\0${syntheticClientIdentity(request)}`;
   const now = Date.now();
   const current = limits.get(key);
   if (!current || now - current.windowStartedAt >= windowSeconds * 1_000) {

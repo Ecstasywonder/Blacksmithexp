@@ -75,6 +75,7 @@ const replayableFailureReasons = new Set([
   "invalid_preferred_time",
   "slot_unavailable",
 ]);
+const idempotencyCleanupBatchSize = 100;
 
 function requestHash(command: RequestAppointmentCommand): string {
   return createHash("sha256")
@@ -150,6 +151,29 @@ async function storeIdempotentResult(
       and key = ${idempotencyKey}
   `);
   return result;
+}
+
+async function deleteExpiredIdempotencyKeys(
+  transaction: TenantTransaction,
+  tenantId: string,
+): Promise<void> {
+  // Keep request-path cleanup bounded. SKIP LOCKED prevents maintenance for
+  // one request from waiting on a key currently owned by another request.
+  await transaction.execute(sql`
+    delete from idempotency_keys as expired
+    using (
+      select tenant_id, key
+      from idempotency_keys
+      where tenant_id = ${tenantId}
+        and expires_at <= now()
+      order by expires_at
+      limit ${idempotencyCleanupBatchSize}
+      for update skip locked
+    ) as cleanup
+    where expired.tenant_id = cleanup.tenant_id
+      and expired.key = cleanup.key
+      and expired.tenant_id = ${tenantId}
+  `);
 }
 
 function hasPostgresCode(error: unknown, code: string): boolean {
@@ -339,6 +363,7 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
         tenantId,
         async (transaction) => {
           const commandHash = requestHash(command);
+          await deleteExpiredIdempotencyKeys(transaction, tenantId);
           await transaction.execute(sql`
             insert into idempotency_keys (
               tenant_id,
@@ -351,7 +376,13 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               ${commandHash},
               now() + interval '24 hours'
             )
-            on conflict (tenant_id, key) do nothing
+            on conflict (tenant_id, key) do update set
+              request_hash = excluded.request_hash,
+              response_status = null,
+              response_body = null,
+              created_at = now(),
+              expires_at = excluded.expires_at
+            where idempotency_keys.expires_at <= now()
           `);
           const idempotencyRows = await transaction.execute<IdempotencyRow>(sql`
             select
