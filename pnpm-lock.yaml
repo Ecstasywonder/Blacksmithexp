@@ -31,6 +31,9 @@ importers:
       react-dom:
         specifier: ^19.2.0
         version: 19.2.8(react@19.2.8)
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
       zod:
         specifier: ^4.1.5
         version: 4.4.3
@@ -50,12 +53,18 @@ importers:
       eslint-config-next:
         specifier: ^16.0.0
         version: 16.3.2(@typescript-eslint/parser@8.68.0(eslint@9.39.5)(typescript@5.9.3))(eslint@9.39.5)(typescript@5.9.3)
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.12
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
 
   packages/database:
     dependencies:
+      "@chairly/domain":
+        specifier: workspace:*
+        version: link:../domain
       drizzle-orm:
         specifier: ^0.44.5
         version: 0.44.7(postgres@3.4.9)
@@ -82,6 +91,12 @@ importers:
         specifier: workspace:*
         version: link:../shared
     devDependencies:
+      "@types/node":
+        specifier: ^22.15.0
+        version: 22.20.1
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.12
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
@@ -98,11 +113,22 @@ importers:
 
   tests/e2e:
     devDependencies:
+      "@axe-core/playwright":
+        specifier: ^4.10.2
+        version: 4.13.0(playwright-core@1.62.1)
       "@playwright/test":
         specifier: ^1.55.0
         version: 1.62.1
 
 packages:
+  "@axe-core/playwright@4.13.0":
+    resolution:
+      {
+        integrity: sha512-6YLx+kxXu5GJceG4ozFg+33a2EMTdjYwWGloJ3sb9Kta5pp+ZNS53uxGVog5JetIY8s++P5UrtX+cri+u0VAVg==,
+      }
+    peerDependencies:
+      playwright-core: ">= 1.0.0"
+
   "@babel/code-frame@7.29.7":
     resolution:
       {
@@ -3565,6 +3591,12 @@ packages:
     engines: { node: ">=10" }
     hasBin: true
 
+  server-only@0.0.1:
+    resolution:
+      {
+        integrity: sha512-qepMx2JxAa5jjfzxG79yPPq+8BuFToHd1hm7kI+Z4zAq1ftQiP7HcxMhDDItrbtwVeLg/cY2JnKnrcFkmiswNA==,
+      }
+
   set-function-length@1.2.2:
     resolution:
       {
@@ -3960,6 +3992,11 @@ packages:
       }
 
 snapshots:
+  "@axe-core/playwright@4.13.0(playwright-core@1.62.1)":
+    dependencies:
+      axe-core: 4.13.0
+      playwright-core: 1.62.1
+
   "@babel/code-frame@7.29.7":
     dependencies:
       "@babel/helper-validator-identifier": 7.29.7
@@ -5999,6 +6036,8 @@ snapshots:
   semver@6.3.1: {}
 
   semver@7.8.5: {}
+
+  server-only@0.0.1: {}
 
   set-function-length@1.2.2:
     dependencies:

@@ -43,15 +43,41 @@ const syntheticCatalogs: Readonly<Record<string, PublicBookingCatalog>> = {
     displayName: "Quiet Studio",
     services: [],
   },
+  "ember-studio": {
+    tenantId: "10000000-0000-4000-8000-000000000003",
+    displayName: "Ember Studio",
+    services: [
+      {
+        id: "20000000-0000-4000-8000-000000000004",
+        name: "Signature silk press",
+        description: "A smooth finish with a cleanse, treatment, and trim.",
+        durationMinutes: 90,
+        priceMinor: 3500000,
+        currency: "NGN",
+      },
+    ],
+  },
 };
 
-export async function loadPublicBookingCatalog(tenantSlug: string) {
-  if (
+export function isSyntheticBookingEnvironment(): boolean {
+  return (
     process.env.CHAIRLY_E2E_CATALOG === "synthetic" &&
     (process.env.NODE_ENV !== "production" ||
       process.env.CHAIRLY_E2E_PRODUCTION_BUILD === "true")
-  ) {
-    return syntheticCatalogs[tenantSlug.toLowerCase()] ?? null;
+  );
+}
+
+export function getSyntheticBookingCatalog(tenantSlug: string) {
+  if (!isSyntheticBookingEnvironment()) {
+    return null;
+  }
+
+  return syntheticCatalogs[tenantSlug.toLowerCase()] ?? null;
+}
+
+export async function loadPublicBookingCatalog(tenantSlug: string) {
+  if (isSyntheticBookingEnvironment()) {
+    return getSyntheticBookingCatalog(tenantSlug);
   }
 
   return getPublishedBookingCatalog(getDatabase().db, tenantSlug);
