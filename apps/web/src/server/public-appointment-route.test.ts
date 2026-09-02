@@ -10,25 +10,35 @@ async function post(
   tenantSlug: string,
   body: unknown,
   options: {
-    clientIp?: string;
+    clientIp?: string | null;
     contentType?: string;
+    forwardedFor?: string;
     idempotencyKey?: string;
   } = {},
 ) {
   const { POST } =
     await import("../app/api/public/[tenantSlug]/appointments/route");
+  const headers = new Headers({
+    "content-type": options.contentType ?? "application/json",
+    "idempotency-key":
+      "idempotencyKey" in options && typeof options.idempotencyKey === "string"
+        ? options.idempotencyKey
+        : `contract-${crypto.randomUUID()}`,
+  });
+  if (options.clientIp !== null) {
+    headers.set(
+      "x-chairly-test-client-ip",
+      options.clientIp ?? crypto.randomUUID(),
+    );
+  }
+  if (options.forwardedFor) {
+    headers.set("x-forwarded-for", options.forwardedFor);
+  }
+
   return POST(
     new Request(`http://localhost:3000/api/public/${tenantSlug}/appointments`, {
       method: "POST",
-      headers: {
-        "content-type": options.contentType ?? "application/json",
-        "idempotency-key":
-          "idempotencyKey" in options &&
-          typeof options.idempotencyKey === "string"
-            ? options.idempotencyKey
-            : `contract-${crypto.randomUUID()}`,
-        "x-forwarded-for": options.clientIp ?? crypto.randomUUID(),
-      },
+      headers,
       body: JSON.stringify(body),
     }),
     { params: Promise.resolve({ tenantSlug }) },
@@ -206,4 +216,23 @@ test("public appointment route applies its risk-based rate limit", async () => {
   };
   assert.equal(payload.error.code, "RATE_LIMITED");
   assert.equal(payload.error.message, failureMessage);
+});
+
+test("untrusted forwarding headers cannot rotate around the rate limit", async () => {
+  const responses = [];
+  for (let index = 0; index < 21; index += 1) {
+    responses.push(
+      await post(
+        "ember-studio",
+        {},
+        {
+          clientIp: null,
+          forwardedFor: `untrusted-${index}`,
+        },
+      ),
+    );
+  }
+
+  assert.equal(responses[19]?.status, 400);
+  assert.equal(responses[20]?.status, 429);
 });

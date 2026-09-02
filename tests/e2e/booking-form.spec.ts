@@ -49,6 +49,68 @@ test.describe("public booking form", () => {
     ).toContainText("request was sent");
   });
 
+  test("blocks an accidental double submit and reports a later duplicate exactly", async ({
+    page,
+  }) => {
+    const requestKeys: string[] = [];
+    let requestCount = 0;
+    let markFirstRequestStarted = () => {};
+    const firstRequestStarted = new Promise<void>((resolve) => {
+      markFirstRequestStarted = resolve;
+    });
+    let releaseFirstResponse = () => {};
+    const firstResponseGate = new Promise<void>((resolve) => {
+      releaseFirstResponse = resolve;
+    });
+
+    await page.route(
+      "**/api/public/luma-studio/appointments",
+      async (route) => {
+        requestCount += 1;
+        requestKeys.push(route.request().headers()["idempotency-key"] ?? "");
+        if (requestCount === 1) {
+          markFirstRequestStarted();
+          await firstResponseGate;
+        }
+        await route.fulfill({
+          body: JSON.stringify({
+            appointment: { id: "synthetic-appointment", status: "pending" },
+            outcome: requestCount === 1 ? "created" : "duplicate",
+          }),
+          contentType: "application/json",
+          status: requestCount === 1 ? 201 : 200,
+        });
+      },
+    );
+
+    await page.goto("/luma-studio/book");
+    await page.getByLabel("Signature silk press").check();
+    await page.getByLabel("Your name").fill("Ada Double Submit");
+    await page
+      .getByLabel("Email or phone number")
+      .fill("ada-double-submit@example.test");
+    await page.getByLabel("Preferred time").fill("2033-09-05T10:30");
+
+    const submitButton = page.locator('button[type="submit"]');
+    await submitButton.click();
+    await firstRequestStarted;
+    await expect(submitButton).toBeDisabled();
+    await expect(submitButton).toHaveText("Submitting request…");
+    await submitButton.evaluate((button) => button.click());
+    await expect.poll(() => requestCount).toBe(1);
+
+    releaseFirstResponse();
+    const status = page.getByRole("status", { name: "Submission status" });
+    await expect(status).toHaveText("Your appointment request was sent.");
+    await submitButton.click();
+    await expect(status).toHaveText(
+      "We already received this booking request — no need to send it again.",
+    );
+    expect(requestCount).toBe(2);
+    expect(new Set(requestKeys).size).toBe(1);
+    await expect(status).toHaveCount(1);
+  });
+
   test("shows all missing-field errors within one second and focuses the first invalid field", async ({
     page,
   }) => {

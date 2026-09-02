@@ -16,13 +16,18 @@ const syntheticState = globalThis as typeof globalThis & {
 };
 
 function clientAddress(request: Request): string {
-  const forwarded = (
-    request.headers.get("x-vercel-forwarded-for") ??
-    request.headers.get("x-forwarded-for")
-  )
+  if (isSyntheticBookingEnvironment()) {
+    return request.headers.get("x-chairly-test-client-ip")?.trim() || "unknown";
+  }
+  if (process.env.VERCEL !== "1") {
+    return "unknown";
+  }
+
+  const forwarded = request.headers
+    .get("x-vercel-forwarded-for")
     ?.split(",", 1)[0]
     ?.trim();
-  return forwarded || request.headers.get("x-real-ip")?.trim() || "unknown";
+  return forwarded || "unknown";
 }
 
 function rateLimitSecret(): string {

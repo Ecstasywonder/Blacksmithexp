@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type {
   AppointmentRequestRepository,
-  RequestAppointmentFailure,
   RequestAppointmentCommand,
   RequestAppointmentResult,
 } from "@chairly/domain";
@@ -70,13 +69,6 @@ type IdempotencyRow = {
   responseBody: unknown;
 };
 
-const replayableFailureReasons = new Set([
-  "service_unavailable",
-  "assignment_unavailable",
-  "invalid_preferred_time",
-  "slot_unavailable",
-]);
-
 function requestHash(command: RequestAppointmentCommand): string {
   return createHash("sha256")
     .update(appointmentRequestIdentity(command))
@@ -112,21 +104,6 @@ function replayResult(value: unknown): RequestAppointmentResult | null {
         outcome: "duplicate",
       };
     }
-  }
-
-  if (
-    value.ok === false &&
-    "reason" in value &&
-    typeof value.reason === "string" &&
-    replayableFailureReasons.has(value.reason)
-  ) {
-    return {
-      ok: false,
-      reason: value.reason as Exclude<
-        RequestAppointmentFailure,
-        "tenant_not_found" | "idempotency_conflict"
-      >,
-    };
   }
 
   return null;
@@ -346,6 +323,11 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
           const requestKey = transportIdempotencyKey(command.idempotencyKey);
           const fingerprintKey = fingerprintIdempotencyKey(commandHash);
           await transaction.execute(sql`
+            delete from idempotency_keys
+            where tenant_id = ${tenantId}
+              and expires_at <= now()
+          `);
+          await transaction.execute(sql`
             insert into idempotency_keys (
               tenant_id,
               key,
@@ -392,12 +374,6 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
           await transaction.execute(
             sql`select pg_advisory_xact_lock(hashtextextended(${`${tenantId}:${commandHash}`}, 0))`,
           );
-          await transaction.execute(sql`
-            delete from idempotency_keys
-            where tenant_id = ${tenantId}
-              and key = ${fingerprintKey}
-              and expires_at <= now()
-          `);
           const fingerprintRows = await transaction.execute<IdempotencyRow>(sql`
               select
                 request_hash as "requestHash",
@@ -443,14 +419,9 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               await transaction.execute(sql`
                 delete from idempotency_keys
                 where tenant_id = ${tenantId}
-                  and key = ${fingerprintKey}
+                  and key in (${fingerprintKey}, ${requestKey})
               `);
-              return storeIdempotentResult(
-                transaction,
-                tenantId,
-                requestKey,
-                result,
-              );
+              return result;
             }
 
             await storeIdempotentResult(

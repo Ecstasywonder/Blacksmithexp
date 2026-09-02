@@ -91,6 +91,19 @@ test(
       });
     }
 
+    async function countIdempotencyKey(tenantId: string, key: string) {
+      return administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantId}, true)`;
+        const rows = await transaction<{ count: number }[]>`
+          select count(*)::int as count
+          from idempotency_keys
+          where tenant_id = ${tenantId}
+            and key = ${key}
+        `;
+        return rows[0]?.count ?? 0;
+      });
+    }
+
     try {
       for (const tenant of tenants) {
         await administrator`
@@ -262,6 +275,30 @@ test(
       assert.equal(resultA.ok, true);
       assert.equal(resultB.ok, true);
 
+      const expiredTenantAKey = `expired:${randomUUID()}`;
+      const expiredTenantBKey = `expired:${randomUUID()}`;
+      for (const [tenant, key] of [
+        [tenantA, expiredTenantAKey],
+        [tenantB, expiredTenantBKey],
+      ] as const) {
+        await administrator.begin(async (transaction) => {
+          await transaction`select set_config('app.tenant_id', ${tenant.id}, true)`;
+          await transaction`
+            insert into idempotency_keys (
+              tenant_id,
+              key,
+              request_hash,
+              expires_at
+            ) values (
+              ${tenant.id},
+              ${key},
+              ${randomUUID()},
+              now() - interval '1 minute'
+            )
+          `;
+        });
+      }
+
       const replayA = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
@@ -277,6 +314,8 @@ test(
         appointment: resultA.appointment,
         outcome: "duplicate",
       });
+      assert.equal(await countIdempotencyKey(tenantA.id, expiredTenantAKey), 0);
+      assert.equal(await countIdempotencyKey(tenantB.id, expiredTenantBKey), 1);
 
       const normalizedDuplicateA = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
@@ -424,13 +463,16 @@ test(
         });
       }
 
-      const outsideWeeklyHours = await requestAppointment(repository, {
+      const retryableRequest = {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
         customerName: "Outside hours",
         contactDetail: "outside-hours@example.test",
         preferredTime: `${appointmentDate}T19:00`,
         idempotencyKey: randomUUID(),
+      };
+      const outsideWeeklyHours = await requestAppointment(repository, {
+        ...retryableRequest,
         requestId: randomUUID(),
       });
       assert.deepEqual(outsideWeeklyHours, {
@@ -459,12 +501,7 @@ test(
         `;
       });
       const availableException = await requestAppointment(repository, {
-        tenantSlug: tenantA.slug,
-        serviceId: tenantA.serviceId,
-        customerName: "Available exception",
-        contactDetail: "available-exception@example.test",
-        preferredTime: `${appointmentDate}T19:00`,
-        idempotencyKey: randomUUID(),
+        ...retryableRequest,
         requestId: randomUUID(),
       });
       assert.equal(availableException.ok, true);

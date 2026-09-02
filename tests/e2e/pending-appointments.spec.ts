@@ -119,7 +119,7 @@ test.describe("pending appointment inbox", () => {
     await expect(
       booking.getByRole("status", { name: "Submission status" }),
     ).toHaveText(
-      "We already received this booking request  no need to send it again.",
+      "We already received this booking request — no need to send it again.",
     );
 
     const idempotencyKey = firstRequest.headers()["idempotency-key"];
@@ -192,11 +192,16 @@ test.describe("pending appointment inbox", () => {
       async (route) => {
         requestCount += 1;
         const currentRequest = requestCount;
-        const response = await route.fetch();
         if (currentRequest === 1) {
+          const response = await route.fetch();
           markFirstProcessed();
           await firstResponseGate;
+          await route.fulfill({ response });
+          return;
         }
+
+        await firstResponseGate;
+        const response = await route.fetch();
         await route.fulfill({ response });
       },
     );
