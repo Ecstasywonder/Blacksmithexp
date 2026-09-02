@@ -273,7 +273,7 @@ Worker leases recover after crashes. Delivery is at least once; handlers and pro
 - Input validation and output encoding are mandatory at trust boundaries.
 - Content Security Policy, HSTS, frame restrictions, safe referrer policy, and permissions policy are configured centrally.
 - CSRF tokens/origin checks protect cookie-authenticated mutations.
-- Public booking, availability, sign-in, token, upload, and webhook endpoints have risk-based rate limits.
+- Public booking, availability, sign-in, token, upload, and webhook endpoints have risk-based rate limits. Public booking scopes are tenant-and-client-specific; self-hosted deployments must provide a validated client IP through a proxy-overwritten trusted header and fail closed if that identity is unavailable.
 - File uploads use signed direct uploads, content sniffing, allowlisted formats, size limits, randomized keys, and image processing before publication.
 - SSRF defenses restrict any server-side remote fetch.
 - Secrets are injected per environment and rotated; `.env.example` contains names only.

@@ -237,7 +237,7 @@ test("untrusted forwarding headers cannot rotate around the rate limit", async (
   assert.equal(responses[20]?.status, 429);
 });
 
-test("self-hosting separates clients only with an explicitly trusted proxy header", async () => {
+test("self-hosting requires a valid client IP from an explicitly trusted proxy header", async () => {
   const previousVercel = process.env.VERCEL;
   const previousTrustedHeader = process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
   try {
@@ -256,13 +256,68 @@ test("self-hosting separates clients only with an explicitly trusted proxy heade
       resolveDeployedPublicBookingClientAddress(request),
       "198.51.100.8",
     );
+    assert.equal(
+      resolveDeployedPublicBookingClientAddress(
+        new Request("http://localhost", {
+          headers: { "x-chairly-client-ip": "203.0.113.9" },
+        }),
+      ),
+      "203.0.113.9",
+    );
 
     delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
-    assert.equal(
-      resolveDeployedPublicBookingClientAddress(request),
-      "shared:self-hosted",
+    assert.throws(
+      () => resolveDeployedPublicBookingClientAddress(request),
+      /TRUSTED_PROXY_CLIENT_IP_HEADER is required outside Vercel/,
+    );
+
+    process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = "x-chairly-client-ip";
+    assert.throws(
+      () =>
+        resolveDeployedPublicBookingClientAddress(
+          new Request("http://localhost", {
+            headers: { "x-chairly-client-ip": "not-an-ip-address" },
+          }),
+        ),
+      /x-chairly-client-ip must contain a valid client IP address/,
     );
   } finally {
+    if (previousVercel === undefined) {
+      delete process.env.VERCEL;
+    } else {
+      process.env.VERCEL = previousVercel;
+    }
+    if (previousTrustedHeader === undefined) {
+      delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+    } else {
+      process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = previousTrustedHeader;
+    }
+  }
+});
+
+test("the public booking route fails closed when self-hosted client identity is not configured", async () => {
+  const previousCatalog = process.env.CHAIRLY_E2E_CATALOG;
+  const previousVercel = process.env.VERCEL;
+  const previousTrustedHeader = process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+  try {
+    delete process.env.CHAIRLY_E2E_CATALOG;
+    delete process.env.VERCEL;
+    delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+
+    const response = await post("luma-studio", {});
+    assert.equal(response.status, 500);
+    const payload = (await response.json()) as {
+      error: { code: string; message: string; requestId: string };
+    };
+    assert.equal(payload.error.code, "INTERNAL_ERROR");
+    assert.equal(payload.error.message, failureMessage);
+    assert.ok(payload.error.requestId);
+  } finally {
+    if (previousCatalog === undefined) {
+      delete process.env.CHAIRLY_E2E_CATALOG;
+    } else {
+      process.env.CHAIRLY_E2E_CATALOG = previousCatalog;
+    }
     if (previousVercel === undefined) {
       delete process.env.VERCEL;
     } else {

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createHmac } from "node:crypto";
+import { isIP } from "node:net";
 import { consumePublicBookingRateLimit } from "@chairly/database";
 import { getDatabase } from "./database";
 import { isSyntheticBookingEnvironment } from "./public-booking-catalog";
@@ -8,7 +9,6 @@ import { isSyntheticBookingEnvironment } from "./public-booking-catalog";
 const maxRequests = 20;
 const windowSeconds = 60;
 const headerNamePattern = /^[a-z0-9][a-z0-9-]{0,127}$/;
-const sharedSelfHostedAddress = "shared:self-hosted";
 
 const syntheticState = globalThis as typeof globalThis & {
   chairlySyntheticPublicRateLimits?: Map<
@@ -21,20 +21,30 @@ function firstForwardedAddress(value: string | null): string | null {
   return value?.split(",", 1)[0]?.trim() || null;
 }
 
+function requireClientIp(value: string | null, headerName: string): string {
+  const address = firstForwardedAddress(value);
+  if (!address || isIP(address) === 0) {
+    throw new Error(`${headerName} must contain a valid client IP address`);
+  }
+  return address;
+}
+
 export function resolveDeployedPublicBookingClientAddress(
   request: Request,
 ): string {
   if (process.env.VERCEL === "1") {
-    return (
-      firstForwardedAddress(request.headers.get("x-vercel-forwarded-for")) ??
-      sharedSelfHostedAddress
+    return requireClientIp(
+      request.headers.get("x-vercel-forwarded-for"),
+      "x-vercel-forwarded-for",
     );
   }
 
   const trustedHeaderName =
     process.env.TRUSTED_PROXY_CLIENT_IP_HEADER?.trim().toLowerCase();
   if (!trustedHeaderName) {
-    return sharedSelfHostedAddress;
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_HEADER is required outside Vercel",
+    );
   }
   if (!headerNamePattern.test(trustedHeaderName)) {
     throw new Error(
@@ -42,9 +52,9 @@ export function resolveDeployedPublicBookingClientAddress(
     );
   }
 
-  return (
-    firstForwardedAddress(request.headers.get(trustedHeaderName)) ??
-    sharedSelfHostedAddress
+  return requireClientIp(
+    request.headers.get(trustedHeaderName),
+    trustedHeaderName,
   );
 }
 
