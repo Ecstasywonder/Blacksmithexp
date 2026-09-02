@@ -7,6 +7,8 @@ import { isSyntheticBookingEnvironment } from "./public-booking-catalog";
 
 const maxRequests = 20;
 const windowSeconds = 60;
+const headerNamePattern = /^[a-z0-9][a-z0-9-]{0,127}$/;
+const sharedSelfHostedAddress = "shared:self-hosted";
 
 const syntheticState = globalThis as typeof globalThis & {
   chairlySyntheticPublicRateLimits?: Map<
@@ -15,19 +17,42 @@ const syntheticState = globalThis as typeof globalThis & {
   >;
 };
 
+function firstForwardedAddress(value: string | null): string | null {
+  return value?.split(",", 1)[0]?.trim() || null;
+}
+
+export function resolveDeployedPublicBookingClientAddress(
+  request: Request,
+): string {
+  if (process.env.VERCEL === "1") {
+    return (
+      firstForwardedAddress(request.headers.get("x-vercel-forwarded-for")) ??
+      sharedSelfHostedAddress
+    );
+  }
+
+  const trustedHeaderName =
+    process.env.TRUSTED_PROXY_CLIENT_IP_HEADER?.trim().toLowerCase();
+  if (!trustedHeaderName) {
+    return sharedSelfHostedAddress;
+  }
+  if (!headerNamePattern.test(trustedHeaderName)) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_HEADER is not a valid header name",
+    );
+  }
+
+  return (
+    firstForwardedAddress(request.headers.get(trustedHeaderName)) ??
+    sharedSelfHostedAddress
+  );
+}
+
 function clientAddress(request: Request): string {
   if (isSyntheticBookingEnvironment()) {
     return request.headers.get("x-chairly-test-client-ip")?.trim() || "unknown";
   }
-  if (process.env.VERCEL !== "1") {
-    return "unknown";
-  }
-
-  const forwarded = request.headers
-    .get("x-vercel-forwarded-for")
-    ?.split(",", 1)[0]
-    ?.trim();
-  return forwarded || "unknown";
+  return resolveDeployedPublicBookingClientAddress(request);
 }
 
 function rateLimitSecret(): string {

@@ -236,3 +236,83 @@ test("untrusted forwarding headers cannot rotate around the rate limit", async (
   assert.equal(responses[19]?.status, 400);
   assert.equal(responses[20]?.status, 429);
 });
+
+test("self-hosting separates clients only with an explicitly trusted proxy header", async () => {
+  const previousVercel = process.env.VERCEL;
+  const previousTrustedHeader = process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+  try {
+    delete process.env.VERCEL;
+    process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = "x-chairly-client-ip";
+    const { resolveDeployedPublicBookingClientAddress } =
+      await import("@/server/public-booking-rate-limit");
+
+    const request = new Request("http://localhost", {
+      headers: {
+        "x-chairly-client-ip": "198.51.100.8",
+        "x-forwarded-for": "attacker-controlled",
+      },
+    });
+    assert.equal(
+      resolveDeployedPublicBookingClientAddress(request),
+      "198.51.100.8",
+    );
+
+    delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+    assert.equal(
+      resolveDeployedPublicBookingClientAddress(request),
+      "shared:self-hosted",
+    );
+  } finally {
+    if (previousVercel === undefined) {
+      delete process.env.VERCEL;
+    } else {
+      process.env.VERCEL = previousVercel;
+    }
+    if (previousTrustedHeader === undefined) {
+      delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+    } else {
+      process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = previousTrustedHeader;
+    }
+  }
+});
+
+test("oversized streamed bodies are cancelled before they are fully read", async () => {
+  const { POST } =
+    await import("../app/api/public/[tenantSlug]/appointments/route");
+  const totalChunks = 10;
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(new Uint8Array(pulls === 1 ? 8_192 : 1));
+      if (pulls === totalChunks) {
+        controller.close();
+      }
+    },
+  });
+  const request = new Request(
+    "http://localhost:3000/api/public/luma-studio/appointments",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": `stream-${crypto.randomUUID()}`,
+        "x-chairly-test-client-ip": crypto.randomUUID(),
+      },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" },
+  );
+
+  const response = await POST(request, {
+    params: Promise.resolve({ tenantSlug: "luma-studio" }),
+  });
+
+  assert.equal(response.status, 413);
+  assert.equal(cancelled, true);
+  assert.ok(pulls < totalChunks);
+});

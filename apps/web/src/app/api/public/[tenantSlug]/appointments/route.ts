@@ -11,6 +11,11 @@ import {
 
 const failureMessage = "We couldn't send your request. Please try again.";
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,200}$/;
+const maxRequestBodyBytes = 8_192;
+
+type RequestBodyResult =
+  | Readonly<{ ok: true; body: string }>
+  | Readonly<{ ok: false; reason: "too_large" | "unreadable" }>;
 
 type PublicAppointmentRouteContext = {
   params: Promise<{ tenantSlug: string }>;
@@ -26,6 +31,39 @@ function errorResponse(
     { error: { code, message: failureMessage, requestId } },
     headers ? { status, headers } : { status },
   );
+}
+
+async function readLimitedRequestBody(
+  request: Request,
+): Promise<RequestBodyResult> {
+  if (!request.body) {
+    return { ok: true, body: "" };
+  }
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let body = "";
+  let bytesRead = 0;
+
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        return { ok: true, body: body + decoder.decode() };
+      }
+
+      bytesRead += chunk.value.byteLength;
+      if (bytesRead > maxRequestBodyBytes) {
+        await reader.cancel().catch(() => undefined);
+        return { ok: false, reason: "too_large" };
+      }
+      body += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export async function POST(
@@ -60,23 +98,22 @@ export async function POST(
   }
 
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > 8_192) {
+  if (contentLength > maxRequestBodyBytes) {
     return errorResponse(413, "VALIDATION_FAILED", requestId);
   }
 
-  let requestBody: string;
-  try {
-    requestBody = await request.text();
-  } catch {
-    return errorResponse(400, "VALIDATION_FAILED", requestId);
-  }
-  if (new TextEncoder().encode(requestBody).byteLength > 8_192) {
-    return errorResponse(413, "VALIDATION_FAILED", requestId);
+  const requestBody = await readLimitedRequestBody(request);
+  if (!requestBody.ok) {
+    return errorResponse(
+      requestBody.reason === "too_large" ? 413 : 400,
+      "VALIDATION_FAILED",
+      requestId,
+    );
   }
 
   let input: unknown;
   try {
-    input = JSON.parse(requestBody);
+    input = JSON.parse(requestBody.body);
   } catch {
     return errorResponse(400, "VALIDATION_FAILED", requestId);
   }
