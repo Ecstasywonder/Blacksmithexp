@@ -19,6 +19,7 @@ type PendingAppointmentsListProps = {
 
 const appointmentRequestsChannel = "chairly-appointment-requests";
 const appointmentRequestSignalKey = "chairly:appointment-requested";
+const fallbackRefreshIntervalMs = 2_000;
 
 function signalMatchesTenant(
   value: string | null,
@@ -70,12 +71,10 @@ export function PendingAppointmentsList({
 
   useEffect(() => {
     let stopped = false;
-    let refreshGeneration = 0;
     let refreshInFlight: Promise<void> | null = null;
     let refreshQueued = false;
 
     async function performRefresh() {
-      const generation = ++refreshGeneration;
       try {
         const response = await fetch("/api/dashboard/pending-appointments", {
           cache: "no-store",
@@ -88,18 +87,13 @@ export function PendingAppointmentsList({
           "appointments" in payload &&
           Array.isArray(payload.appointments) &&
           payload.appointments.every(isPendingAppointment) &&
-          !stopped &&
-          generation === refreshGeneration
+          !stopped
         ) {
           setAppointments(payload.appointments);
         }
       } catch {
         // A later poll recovers from transient network failures.
       }
-    }
-
-    function refreshImmediately() {
-      void performRefresh();
     }
 
     function refresh() {
@@ -129,7 +123,7 @@ export function PendingAppointmentsList({
         "tenantSlug" in event.data &&
         event.data.tenantSlug === tenantSlug
       ) {
-        refreshImmediately();
+        void refresh();
       }
     });
     const handleStorage = (event: StorageEvent) => {
@@ -137,7 +131,7 @@ export function PendingAppointmentsList({
         event.key === appointmentRequestSignalKey &&
         signalMatchesTenant(event.newValue, tenantSlug)
       ) {
-        refreshImmediately();
+        void refresh();
       }
     };
     window.addEventListener("storage", handleStorage);
@@ -154,12 +148,23 @@ export function PendingAppointmentsList({
       // Polling still works when browser storage is unavailable.
     }
     void refresh();
-    const interval = window.setInterval(() => void refresh(), 250);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    }, fallbackRefreshIntervalMs);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void refresh();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       stopped = true;
       channel?.close();
       window.removeEventListener("storage", handleStorage);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.clearInterval(interval);
     };
   }, [tenantSlug]);

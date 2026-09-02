@@ -69,6 +69,8 @@ type IdempotencyRow = {
   responseBody: unknown;
 };
 
+const idempotencyCleanupBatchSize = 100;
+
 function requestHash(command: RequestAppointmentCommand): string {
   return createHash("sha256")
     .update(appointmentRequestIdentity(command))
@@ -131,6 +133,27 @@ async function storeIdempotentResult(
       and key = ${idempotencyKey}
   `);
   return result;
+}
+
+async function deleteExpiredIdempotencyKeys(
+  transaction: TenantTransaction,
+  tenantId: string,
+): Promise<void> {
+  await transaction.execute(sql`
+    delete from idempotency_keys as expired
+    using (
+      select tenant_id, key
+      from idempotency_keys
+      where tenant_id = ${tenantId}
+        and expires_at <= now()
+      order by expires_at
+      limit ${idempotencyCleanupBatchSize}
+      for update skip locked
+    ) as cleanup
+    where expired.tenant_id = cleanup.tenant_id
+      and expired.key = cleanup.key
+      and expired.tenant_id = ${tenantId}
+  `);
 }
 
 function hasPostgresCode(error: unknown, code: string): boolean {
@@ -322,11 +345,7 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
           const commandHash = requestHash(command);
           const requestKey = transportIdempotencyKey(command.idempotencyKey);
           const fingerprintKey = fingerprintIdempotencyKey(commandHash);
-          await transaction.execute(sql`
-            delete from idempotency_keys
-            where tenant_id = ${tenantId}
-              and expires_at <= now()
-          `);
+          await deleteExpiredIdempotencyKeys(transaction, tenantId);
           await transaction.execute(sql`
             insert into idempotency_keys (
               tenant_id,

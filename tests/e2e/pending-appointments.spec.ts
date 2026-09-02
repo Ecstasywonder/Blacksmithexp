@@ -64,7 +64,6 @@ test.describe("pending appointment inbox", () => {
     await expect(
       booking.getByRole("status", { name: "Submission status" }),
     ).toContainText("request was sent");
-    await dashboard.bringToFront();
     const acceptedAt = Date.now();
 
     const requestCard = dashboard
