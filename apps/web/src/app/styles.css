@@ -118,6 +118,90 @@ section p {
   }
 }
 
+/* Read-only appointment inbox */
+.appointment-list {
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.appointment-card,
+.appointments-empty {
+  padding: 22px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.appointment-card-heading {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.appointment-card h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: -0.025em;
+}
+
+.appointment-status {
+  padding: 6px 10px;
+  color: #6c2940;
+  background: #f7e6ec;
+  border: 1px solid #e9bac9;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.appointment-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 22px 0 0;
+}
+
+.appointment-card dl > div {
+  min-width: 0;
+}
+
+.appointment-card dt {
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.appointment-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+
+.appointment-time-zone {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.appointments-empty {
+  max-width: 760px;
+  margin-top: 32px;
+}
+
+@media (max-width: 720px) {
+  .appointment-card dl {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Public booking flow */
 .booking-page {
   width: min(760px, calc(100% - 32px));

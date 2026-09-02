@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 export type BookingFormService = {
   id: string;
@@ -13,12 +13,14 @@ export type BookingFormService = {
 type BookingFormProps = {
   businessName: string;
   services: BookingFormService[];
+  tenantSlug: string;
 };
 
 type BookingField =
   "serviceId" | "customerName" | "contactDetail" | "preferredTime";
 
 type BookingFieldErrors = Partial<Record<BookingField, string>>;
+type SubmissionState = "idle" | "submitting" | "success" | "error";
 
 const bookingFieldOrder: readonly BookingField[] = [
   "serviceId",
@@ -27,11 +29,36 @@ const bookingFieldOrder: readonly BookingField[] = [
   "preferredTime",
 ];
 
-const simpleClockTimePattern = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const localDateTimePattern =
+  /^(?:\d{4})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d$/;
+const failureMessage = "We couldn't send your request. Please try again.";
+const appointmentRequestsChannel = "chairly-appointment-requests";
+const appointmentRequestSignalKey = "chairly:appointment-requested";
 
 function readTextField(formData: FormData, field: BookingField) {
   const value = formData.get(field);
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isCalendarDateTime(value: string): boolean {
+  if (!localDateTimePattern.test(value)) {
+    return false;
+  }
+
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const hour = Number(value.slice(11, 13));
+  const minute = Number(value.slice(14, 16));
+  const candidate = new Date(Date.UTC(year, month - 1, day, hour, minute));
+
+  return (
+    candidate.getUTCFullYear() === year &&
+    candidate.getUTCMonth() === month - 1 &&
+    candidate.getUTCDate() === day &&
+    candidate.getUTCHours() === hour &&
+    candidate.getUTCMinutes() === minute
+  );
 }
 
 function validateBookingRequest(
@@ -58,26 +85,34 @@ function validateBookingRequest(
 
   if (!preferredTime) {
     errors.preferredTime = "Enter your preferred time";
-  } else if (!simpleClockTimePattern.test(preferredTime)) {
-    errors.preferredTime = "Enter a valid time, like 2:30 PM";
+  } else if (!isCalendarDateTime(preferredTime)) {
+    errors.preferredTime = "Choose a valid preferred date and time";
   }
 
   return errors;
 }
 
-export function BookingForm({ businessName, services }: BookingFormProps) {
+export function BookingForm({
+  businessName,
+  services,
+  tenantSlug,
+}: BookingFormProps) {
   const [selectedServiceId, setSelectedServiceId] = useState("");
   const [errors, setErrors] = useState<BookingFieldErrors>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionState, setSubmissionState] =
+    useState<SubmissionState>("idle");
+  const submissionIdentity = useRef<{ body: string; key: string } | null>(null);
+  const isSubmitting = submissionState === "submitting";
   const selectedService = services.find(
     (service) => service.id === selectedServiceId,
   );
 
-  function beginSubmission(event: FormEvent<HTMLFormElement>) {
+  async function submitRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
+    const formData = new FormData(form);
     const nextErrors = validateBookingRequest(
-      new FormData(form),
+      formData,
       new Set(services.map((service) => service.id)),
     );
     const firstInvalidField = bookingFieldOrder.find(
@@ -86,13 +121,59 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
 
     if (firstInvalidField) {
       setErrors(nextErrors);
-      setIsSubmitting(false);
+      setSubmissionState("idle");
       form.querySelector<HTMLElement>(`[name="${firstInvalidField}"]`)?.focus();
       return;
     }
 
     setErrors({});
-    setIsSubmitting(true);
+    setSubmissionState("submitting");
+
+    try {
+      const body = JSON.stringify({
+        serviceId: formData.get("serviceId"),
+        customerName: formData.get("customerName"),
+        contactDetail: formData.get("contactDetail"),
+        preferredTime: formData.get("preferredTime"),
+      });
+      if (submissionIdentity.current?.body !== body) {
+        submissionIdentity.current = {
+          body,
+          key: crypto.randomUUID(),
+        };
+      }
+
+      const response = await fetch(
+        `/api/public/${encodeURIComponent(tenantSlug)}/appointments`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "idempotency-key": submissionIdentity.current.key,
+          },
+          body,
+        },
+      );
+
+      if (response.ok && typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel(appointmentRequestsChannel);
+        channel.postMessage({ tenantSlug });
+        channel.close();
+      }
+      if (response.ok) {
+        try {
+          window.localStorage.setItem(
+            appointmentRequestSignalKey,
+            JSON.stringify({ tenantSlug, nonce: crypto.randomUUID() }),
+          );
+        } catch {
+          // The dashboard also continues polling when storage is unavailable.
+        }
+      }
+      setSubmissionState(response.ok ? "success" : "error");
+    } catch {
+      setSubmissionState("error");
+    }
   }
 
   function clearError(field: BookingField) {
@@ -112,7 +193,7 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
       aria-label="Book an appointment"
       className="booking-form"
       noValidate
-      onSubmit={beginSubmission}
+      onSubmit={submitRequest}
     >
       <fieldset
         aria-describedby={errors.serviceId ? "serviceId-error" : undefined}
@@ -239,12 +320,10 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
             aria-invalid={Boolean(errors.preferredTime)}
             autoComplete="off"
             id="preferredTime"
-            inputMode="text"
             name="preferredTime"
             onChange={() => clearError("preferredTime")}
-            placeholder="2:30 PM"
             required
-            type="text"
+            type="datetime-local"
           />
           {errors.preferredTime ? (
             <span
@@ -283,9 +362,13 @@ export function BookingForm({ businessName, services }: BookingFormProps) {
           className="booking-submit-status"
           role="status"
         >
-          {isSubmitting
+          {submissionState === "submitting"
             ? "Your appointment request is being submitted."
-            : "No payment is taken now."}
+            : submissionState === "success"
+              ? "Your appointment request was sent."
+              : submissionState === "error"
+                ? failureMessage
+                : "No payment is taken now."}
         </p>
       </div>
     </form>

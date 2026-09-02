@@ -9,12 +9,13 @@
   },
   "scripts": {
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:migrate:test": "drizzle-kit migrate",
-    "test": "tsx --test src/public-booking-catalog.integration.test.ts",
+    "db:migrate": "tsx src/migrate.ts",
+    "db:migrate:test": "tsx src/migrate.ts",
+    "test": "tsx --test --test-isolation=none src/public-booking-catalog.integration.test.ts src/appointments.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@chairly/domain": "workspace:*",
     "drizzle-orm": "^0.44.5",
     "postgres": "^3.4.7"
   },

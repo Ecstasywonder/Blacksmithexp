@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test.describe("public booking form", () => {
-  test("is usable on a phone and visibly begins a complete submission", async ({
+  test("is usable on a phone and submits a complete request", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -31,7 +31,7 @@ test.describe("public booking form", () => {
 
     await page.getByLabel("Your name").fill("Ada Okafor");
     await page.getByLabel("Email or phone number").fill("ada@example.test");
-    await page.getByLabel("Preferred time").fill("10:30 AM");
+    await page.getByLabel("Preferred time").fill("2033-09-03T10:30");
 
     const submitButton = page.getByRole("button", {
       name: "Request appointment",
@@ -42,11 +42,8 @@ test.describe("public booking form", () => {
     await submitButton.click();
     await expect(page.locator(".booking-error")).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Submitting request…" }),
-    ).toBeVisible({ timeout: 1_000 });
-    await expect(
       page.getByRole("status", { name: "Submission status" }),
-    ).toContainText("being submitted");
+    ).toContainText("request was sent");
   });
 
   test("shows all missing-field errors within one second and focuses the first invalid field", async ({
@@ -91,7 +88,7 @@ test.describe("public booking form", () => {
     ).toContainText("No payment is taken now.");
   });
 
-  test("rejects a malformed preferred time and submits after correction", async ({
+  test("rejects a malformed preferred date-time and submits after correction", async ({
     page,
   }) => {
     await page.goto("/luma-studio/book");
@@ -100,11 +97,15 @@ test.describe("public booking form", () => {
     await page.getByLabel("Your name").fill("Chidi Nwosu");
     await page.getByLabel("Email or phone number").fill("+234 801 234 5678");
     const preferredTime = page.getByLabel("Preferred time");
-    await preferredTime.fill("tomorrow-ish");
+    await preferredTime.evaluate((element) => {
+      const input = element as HTMLInputElement;
+      input.type = "text";
+      input.value = "2033-02-30T10:30";
+    });
     await page.getByRole("button", { name: "Request appointment" }).click();
 
     await expect(
-      page.getByText("Enter a valid time, like 2:30 PM", { exact: true }),
+      page.getByText("Choose a valid preferred date and time", { exact: true }),
     ).toBeVisible({ timeout: 1_000 });
     await expect(preferredTime).toBeFocused();
     await expect(page).toHaveURL(/\/luma-studio\/book$/);
@@ -112,12 +113,15 @@ test.describe("public booking form", () => {
       page.getByRole("button", { name: "Request appointment" }),
     ).toBeEnabled();
 
-    await preferredTime.fill("2:30 PM");
+    await preferredTime.evaluate((element) => {
+      (element as HTMLInputElement).type = "datetime-local";
+    });
+    await preferredTime.fill("2033-09-04T14:00");
     await page.getByRole("button", { name: "Request appointment" }).click();
-    await expect(
-      page.getByRole("button", { name: "Submitting request…" }),
-    ).toBeVisible({ timeout: 1_000 });
     await expect(page.locator(".booking-error")).toHaveCount(0);
+    await expect(
+      page.getByRole("status", { name: "Submission status" }),
+    ).toContainText("request was sent");
   });
 
   test("shows a clear message when the business has no published services", async ({
