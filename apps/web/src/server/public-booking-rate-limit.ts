@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { consumePublicBookingRateLimit } from "@chairly/database";
 import { getDatabase } from "./database";
@@ -9,6 +9,8 @@ import { isSyntheticBookingEnvironment } from "./public-booking-catalog";
 const maxRequests = 20;
 const windowSeconds = 60;
 const headerNamePattern = /^[a-z0-9][a-z0-9-]{0,127}$/;
+const trustedProxySignatureHeader = "x-chairly-client-ip-signature";
+const signaturePattern = /^[a-f0-9]{64}$/i;
 
 const syntheticState = globalThis as typeof globalThis & {
   chairlySyntheticPublicRateLimits?: Map<
@@ -27,6 +29,47 @@ function requireClientIp(value: string | null, headerName: string): string {
     throw new Error(`${headerName} must contain a valid client IP address`);
   }
   return address;
+}
+
+function requireSingleClientIp(
+  value: string | null,
+  headerName: string,
+): string {
+  const address = value?.trim() ?? "";
+  if (!address || address.includes(",") || isIP(address) === 0) {
+    throw new Error(
+      `${headerName} must contain exactly one valid client IP address`,
+    );
+  }
+  return address;
+}
+
+function verifyTrustedProxySignature(
+  request: Request,
+  headerName: string,
+  address: string,
+): void {
+  const secret = process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_SECRET must contain at least 32 characters",
+    );
+  }
+
+  const suppliedSignature = request.headers
+    .get(trustedProxySignatureHeader)
+    ?.trim();
+  if (!suppliedSignature || !signaturePattern.test(suppliedSignature)) {
+    throw new Error("Trusted proxy client identity signature is invalid");
+  }
+
+  const expectedSignature = createHmac("sha256", secret)
+    .update(`client-ip:v1\0${headerName}\0${address}`)
+    .digest();
+  const suppliedSignatureBytes = Buffer.from(suppliedSignature, "hex");
+  if (!timingSafeEqual(expectedSignature, suppliedSignatureBytes)) {
+    throw new Error("Trusted proxy client identity signature is invalid");
+  }
 }
 
 export function resolveDeployedPublicBookingClientAddress(
@@ -52,10 +95,18 @@ export function resolveDeployedPublicBookingClientAddress(
     );
   }
 
-  return requireClientIp(
+  if (trustedHeaderName === trustedProxySignatureHeader) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_HEADER cannot be the signature header",
+    );
+  }
+
+  const address = requireSingleClientIp(
     request.headers.get(trustedHeaderName),
     trustedHeaderName,
   );
+  verifyTrustedProxySignature(request, trustedHeaderName, address);
+  return address;
 }
 
 function clientAddress(request: Request): string {

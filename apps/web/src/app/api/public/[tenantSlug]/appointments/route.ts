@@ -60,6 +60,7 @@ async function readLimitedRequestBody(
       body += decoder.decode(chunk.value, { stream: true });
     }
   } catch {
+    await reader.cancel().catch(() => undefined);
     return { ok: false, reason: "unreadable" };
   } finally {
     reader.releaseLock();
@@ -97,9 +98,15 @@ export async function POST(
     return errorResponse(415, "VALIDATION_FAILED", requestId);
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > maxRequestBodyBytes) {
-    return errorResponse(413, "VALIDATION_FAILED", requestId);
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+      return errorResponse(400, "VALIDATION_FAILED", requestId);
+    }
+    if (contentLength > maxRequestBodyBytes) {
+      return errorResponse(413, "VALIDATION_FAILED", requestId);
+    }
   }
 
   const requestBody = await readLimitedRequestBody(request);

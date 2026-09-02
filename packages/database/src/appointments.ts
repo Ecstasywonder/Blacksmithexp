@@ -400,6 +400,7 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               from idempotency_keys
               where tenant_id = ${tenantId}
                 and key = ${fingerprintKey}
+                and expires_at > now()
               for update
             `);
           const fingerprint = fingerprintRows[0];
@@ -431,6 +432,13 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               ${commandHash},
               now() + interval '24 hours'
             )
+            on conflict (tenant_id, key) do update set
+              request_hash = excluded.request_hash,
+              response_status = null,
+              response_body = null,
+              created_at = now(),
+              expires_at = excluded.expires_at
+            where idempotency_keys.expires_at <= now()
           `);
 
           const complete = async (result: RequestAppointmentResult) => {

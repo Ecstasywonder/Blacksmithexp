@@ -1,19 +1,33 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import test from "node:test";
 
 process.env.CHAIRLY_E2E_CATALOG = "synthetic";
 
 const serviceId = "20000000-0000-4000-8000-000000000001";
 const failureMessage = "We couldn't send your request. Please try again.";
+const trustedProxySecret = "test-only-trusted-proxy-client-ip-secret";
+
+function signTrustedClientIp(
+  address: string,
+  headerName = "x-chairly-client-ip",
+): string {
+  return createHmac("sha256", trustedProxySecret)
+    .update(`client-ip:v1\0${headerName}\0${address}`)
+    .digest("hex");
+}
 
 async function post(
   tenantSlug: string,
   body: unknown,
   options: {
     clientIp?: string | null;
+    contentLength?: string;
     contentType?: string;
     forwardedFor?: string;
     idempotencyKey?: string;
+    trustedClientIp?: string;
+    trustedClientIpSignature?: string;
   } = {},
 ) {
   const { POST } =
@@ -33,6 +47,18 @@ async function post(
   }
   if (options.forwardedFor) {
     headers.set("x-forwarded-for", options.forwardedFor);
+  }
+  if (options.contentLength) {
+    headers.set("content-length", options.contentLength);
+  }
+  if (options.trustedClientIp) {
+    headers.set("x-chairly-client-ip", options.trustedClientIp);
+  }
+  if (options.trustedClientIpSignature) {
+    headers.set(
+      "x-chairly-client-ip-signature",
+      options.trustedClientIpSignature,
+    );
   }
 
   return POST(
@@ -237,41 +263,68 @@ test("untrusted forwarding headers cannot rotate around the rate limit", async (
   assert.equal(responses[20]?.status, 429);
 });
 
-test("self-hosting requires a valid client IP from an explicitly trusted proxy header", async () => {
+test("self-hosting authenticates a single proxy-supplied client IP", async () => {
   const previousVercel = process.env.VERCEL;
   const previousTrustedHeader = process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+  const previousTrustedSecret = process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
   try {
     delete process.env.VERCEL;
     process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = "x-chairly-client-ip";
+    process.env.TRUSTED_PROXY_CLIENT_IP_SECRET = trustedProxySecret;
     const { resolveDeployedPublicBookingClientAddress } =
       await import("@/server/public-booking-rate-limit");
 
+    const address = "198.51.100.8";
     const request = new Request("http://localhost", {
       headers: {
-        "x-chairly-client-ip": "198.51.100.8",
+        "x-chairly-client-ip": address,
+        "x-chairly-client-ip-signature": signTrustedClientIp(address),
         "x-forwarded-for": "attacker-controlled",
       },
     });
-    assert.equal(
-      resolveDeployedPublicBookingClientAddress(request),
-      "198.51.100.8",
+    assert.equal(resolveDeployedPublicBookingClientAddress(request), address);
+
+    assert.throws(
+      () =>
+        resolveDeployedPublicBookingClientAddress(
+          new Request("http://localhost", {
+            headers: { "x-chairly-client-ip": "203.0.113.9" },
+          }),
+        ),
+      /signature is invalid/,
     );
-    assert.equal(
-      resolveDeployedPublicBookingClientAddress(
-        new Request("http://localhost", {
-          headers: { "x-chairly-client-ip": "203.0.113.9" },
-        }),
-      ),
-      "203.0.113.9",
+    assert.throws(
+      () =>
+        resolveDeployedPublicBookingClientAddress(
+          new Request("http://localhost", {
+            headers: {
+              "x-chairly-client-ip": "203.0.113.9",
+              "x-chairly-client-ip-signature": signTrustedClientIp(address),
+            },
+          }),
+        ),
+      /signature is invalid/,
+    );
+    assert.throws(
+      () =>
+        resolveDeployedPublicBookingClientAddress(
+          new Request("http://localhost", {
+            headers: {
+              "x-chairly-client-ip": "198.51.100.8, 203.0.113.9",
+              "x-chairly-client-ip-signature": signTrustedClientIp(address),
+            },
+          }),
+        ),
+      /must contain exactly one valid client IP address/,
     );
 
-    delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+    process.env.TRUSTED_PROXY_CLIENT_IP_SECRET = "too-short";
     assert.throws(
       () => resolveDeployedPublicBookingClientAddress(request),
-      /TRUSTED_PROXY_CLIENT_IP_HEADER is required outside Vercel/,
+      /TRUSTED_PROXY_CLIENT_IP_SECRET must contain at least 32 characters/,
     );
+    process.env.TRUSTED_PROXY_CLIENT_IP_SECRET = trustedProxySecret;
 
-    process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = "x-chairly-client-ip";
     assert.throws(
       () =>
         resolveDeployedPublicBookingClientAddress(
@@ -279,7 +332,13 @@ test("self-hosting requires a valid client IP from an explicitly trusted proxy h
             headers: { "x-chairly-client-ip": "not-an-ip-address" },
           }),
         ),
-      /x-chairly-client-ip must contain a valid client IP address/,
+      /must contain exactly one valid client IP address/,
+    );
+
+    delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+    assert.throws(
+      () => resolveDeployedPublicBookingClientAddress(request),
+      /TRUSTED_PROXY_CLIENT_IP_HEADER is required outside Vercel/,
     );
   } finally {
     if (previousVercel === undefined) {
@@ -292,6 +351,11 @@ test("self-hosting requires a valid client IP from an explicitly trusted proxy h
     } else {
       process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = previousTrustedHeader;
     }
+    if (previousTrustedSecret === undefined) {
+      delete process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
+    } else {
+      process.env.TRUSTED_PROXY_CLIENT_IP_SECRET = previousTrustedSecret;
+    }
   }
 });
 
@@ -299,10 +363,12 @@ test("the public booking route fails closed when self-hosted client identity is 
   const previousCatalog = process.env.CHAIRLY_E2E_CATALOG;
   const previousVercel = process.env.VERCEL;
   const previousTrustedHeader = process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+  const previousTrustedSecret = process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
   try {
     delete process.env.CHAIRLY_E2E_CATALOG;
     delete process.env.VERCEL;
     delete process.env.TRUSTED_PROXY_CLIENT_IP_HEADER;
+    delete process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
 
     const response = await post("luma-studio", {});
     assert.equal(response.status, 500);
@@ -312,6 +378,21 @@ test("the public booking route fails closed when self-hosted client identity is 
     assert.equal(payload.error.code, "INTERNAL_ERROR");
     assert.equal(payload.error.message, failureMessage);
     assert.ok(payload.error.requestId);
+
+    process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = "x-chairly-client-ip";
+    process.env.TRUSTED_PROXY_CLIENT_IP_SECRET = trustedProxySecret;
+    const unsignedResponse = await post(
+      "luma-studio",
+      {},
+      { trustedClientIp: "198.51.100.8" },
+    );
+    assert.equal(unsignedResponse.status, 500);
+    const unsignedPayload = (await unsignedResponse.json()) as {
+      error: { code: string; message: string; requestId: string };
+    };
+    assert.equal(unsignedPayload.error.code, "INTERNAL_ERROR");
+    assert.equal(unsignedPayload.error.message, failureMessage);
+    assert.ok(unsignedPayload.error.requestId);
   } finally {
     if (previousCatalog === undefined) {
       delete process.env.CHAIRLY_E2E_CATALOG;
@@ -328,7 +409,61 @@ test("the public booking route fails closed when self-hosted client identity is 
     } else {
       process.env.TRUSTED_PROXY_CLIENT_IP_HEADER = previousTrustedHeader;
     }
+    if (previousTrustedSecret === undefined) {
+      delete process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
+    } else {
+      process.env.TRUSTED_PROXY_CLIENT_IP_SECRET = previousTrustedSecret;
+    }
   }
+});
+
+test("invalid content lengths are rejected before parsing", async () => {
+  const response = await post(
+    "luma-studio",
+    {},
+    { contentLength: "not-a-length" },
+  );
+
+  assert.equal(response.status, 400);
+  const payload = (await response.json()) as {
+    error: { code: string; message: string };
+  };
+  assert.equal(payload.error.code, "VALIDATION_FAILED");
+  assert.equal(payload.error.message, failureMessage);
+});
+
+test("malformed UTF-8 request streams are cancelled", async () => {
+  const { POST } =
+    await import("../app/api/public/[tenantSlug]/appointments/route");
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+    pull(controller) {
+      controller.enqueue(Uint8Array.from([0xc3, 0x28]));
+    },
+  });
+  const request = new Request(
+    "http://localhost:3000/api/public/luma-studio/appointments",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": `utf8-${crypto.randomUUID()}`,
+        "x-chairly-test-client-ip": crypto.randomUUID(),
+      },
+      body,
+      duplex: "half",
+    } as RequestInit & { duplex: "half" },
+  );
+
+  const response = await POST(request, {
+    params: Promise.resolve({ tenantSlug: "luma-studio" }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(cancelled, true);
 });
 
 test("oversized streamed bodies are cancelled before they are fully read", async () => {

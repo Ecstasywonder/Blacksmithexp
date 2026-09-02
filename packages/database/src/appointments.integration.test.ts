@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
-import { requestAppointment } from "@chairly/domain";
+import {
+  appointmentRequestIdentity,
+  requestAppointment,
+} from "@chairly/domain";
 import postgres from "postgres";
 import {
   createDatabase,
@@ -506,6 +509,58 @@ test(
       });
       assert.equal(availableException.ok, true);
 
+      const expiredFingerprintCommand = {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Expired fingerprint",
+        contactDetail: "expired-fingerprint@example.test",
+        preferredTime: `${futureLocalDate(31)}T10:30`,
+      };
+      const expiredFingerprintHash = createHash("sha256")
+        .update(appointmentRequestIdentity(expiredFingerprintCommand))
+        .digest("hex");
+      const expiredFingerprintKey = `public-fingerprint:v1:${expiredFingerprintHash}`;
+      const cleanupBlockerPrefix = `cleanup-blocker:${randomUUID()}:`;
+      await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        await transaction`
+          insert into idempotency_keys (
+            tenant_id,
+            key,
+            request_hash,
+            expires_at
+          )
+          select
+            ${tenantA.id},
+            ${cleanupBlockerPrefix} || sequence::text,
+            'expired-cleanup-blocker',
+            now() - interval '2 days'
+          from generate_series(1, 100) as sequence
+        `;
+        await transaction`
+          insert into idempotency_keys (
+            tenant_id,
+            key,
+            request_hash,
+            expires_at
+          ) values (
+            ${tenantA.id},
+            ${expiredFingerprintKey},
+            ${expiredFingerprintHash},
+            now() - interval '1 minute'
+          )
+        `;
+      });
+      const expiredFingerprintRetry = await requestAppointment(repository, {
+        ...expiredFingerprintCommand,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.equal(
+        expiredFingerprintRetry.ok && expiredFingerprintRetry.outcome,
+        "created",
+      );
+
       const bufferConflict = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
@@ -608,10 +663,10 @@ test(
           `;
       });
       assert.deepEqual(aggregateCounts[0], {
-        appointments: 5,
-        events: 5,
-        audits: 5,
-        outbox: 5,
+        appointments: 6,
+        events: 6,
+        audits: 6,
+        outbox: 6,
       });
     } finally {
       for (const tenant of tenants) {
