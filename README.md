@@ -30,7 +30,7 @@ The deployment runtime role needs `EXECUTE` on `app.resolve_published_tenant(tex
 
 ## Public booking contract
 
-`POST /api/public/{tenantSlug}/appointments` accepts JSON containing `serviceId`, `customerName`, `contactDetail`, and a timezone-local `preferredTime` in `YYYY-MM-DDTHH:mm` form. Successful requests return `201` with an appointment ID and `pending` status. Invalid, unmatched, conflicting, rate-limited, and internal failures use the safe customer message documented in the product requirements and include a request ID; `429` responses include `Retry-After`.
+`POST /api/public/{tenantSlug}/appointments` accepts JSON containing `serviceId`, `customerName`, `contactDetail`, and a timezone-local `preferredTime` in `YYYY-MM-DDTHH:mm` form. A newly created request returns `201` with `outcome: "created"`; an idempotent replay returns `200` with `outcome: "duplicate"`. Both responses include the original appointment ID and `pending` status. Invalid, unmatched, conflicting, rate-limited, and internal failures use the safe customer message documented in the product requirements and include a request ID; `429` responses include `Retry-After`.
 
 Set `RATE_LIMIT_SECRET` to a separate random value of at least 32 characters. Only an HMAC of the normalized business slug and proxy-supplied client address is persisted in rate-limit counters. Vercel deployments use the platform-overwritten `x-vercel-forwarded-for` header.
 

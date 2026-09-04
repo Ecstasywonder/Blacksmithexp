@@ -11,6 +11,7 @@ import {
 
 const failureMessage = "We couldn't send your request. Please try again.";
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,200}$/;
+const contentLengthPattern = /^\d+$/;
 const maxRequestBodyBytes = 8_192;
 
 type RequestBodyResult =
@@ -101,7 +102,10 @@ export async function POST(
   const contentLengthHeader = request.headers.get("content-length");
   if (contentLengthHeader !== null) {
     const contentLength = Number(contentLengthHeader);
-    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+    if (
+      !contentLengthPattern.test(contentLengthHeader) ||
+      !Number.isSafeInteger(contentLength)
+    ) {
       return errorResponse(400, "VALIDATION_FAILED", requestId);
     }
     if (contentLength > maxRequestBodyBytes) {

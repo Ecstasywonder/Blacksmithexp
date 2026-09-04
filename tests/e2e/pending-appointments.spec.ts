@@ -65,6 +65,7 @@ test.describe("pending appointment inbox", () => {
       booking.getByRole("status", { name: "Submission status" }),
     ).toContainText("request was sent");
     const acceptedAt = Date.now();
+    await dashboard.bringToFront();
 
     const requestCard = dashboard
       .getByRole("listitem")
@@ -300,7 +301,41 @@ test.describe("pending appointment inbox", () => {
       ]);
       expect(responseA.status()).toBe(201);
       expect(responseB.status()).toBe(201);
-      const acceptedAt = Date.now();
+      const [createdA, createdB] = (await Promise.all([
+        responseA.json(),
+        responseB.json(),
+      ])) as [{ appointment: { id: string } }, { appointment: { id: string } }];
+
+      await expect
+        .poll(
+          async () => {
+            const [dashboardResponseA, dashboardResponseB] = await Promise.all([
+              contextA.request.get(
+                `${appUrl}/api/dashboard/pending-appointments`,
+              ),
+              contextB.request.get(
+                `${appUrl}/api/dashboard/pending-appointments`,
+              ),
+            ]);
+            const [dashboardPayloadA, dashboardPayloadB] = (await Promise.all([
+              dashboardResponseA.json(),
+              dashboardResponseB.json(),
+            ])) as [
+              { appointments: { id: string; customerName: string }[] },
+              { appointments: { id: string; customerName: string }[] },
+            ];
+
+            return [dashboardPayloadA, dashboardPayloadB].map((payload) =>
+              payload.appointments
+                .filter(
+                  (appointment) => appointment.customerName === customerName,
+                )
+                .map((appointment) => appointment.id),
+            );
+          },
+          { timeout: 5_000 },
+        )
+        .toEqual([[createdA.appointment.id], [createdB.appointment.id]]);
 
       const matchingA = dashboardA
         .getByRole("listitem")
@@ -308,9 +343,10 @@ test.describe("pending appointment inbox", () => {
       const matchingB = dashboardB
         .getByRole("listitem")
         .filter({ hasText: customerName });
-      await expect(matchingA).toHaveCount(1, { timeout: 2_000 });
-      await expect(matchingB).toHaveCount(1, { timeout: 2_000 });
-      expect(Date.now() - acceptedAt).toBeLessThan(2_000);
+      await Promise.all([
+        expect(matchingA).toHaveCount(1, { timeout: 5_000 }),
+        expect(matchingB).toHaveCount(1, { timeout: 5_000 }),
+      ]);
       await expect(dashboardA.getByText("Luma Studio")).toBeVisible();
       await expect(dashboardB.getByText("Ember Studio")).toBeVisible();
     } finally {

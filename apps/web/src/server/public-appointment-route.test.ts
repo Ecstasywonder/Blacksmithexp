@@ -417,19 +417,29 @@ test("the public booking route fails closed when self-hosted client identity is 
   }
 });
 
-test("invalid content lengths are rejected before parsing", async () => {
-  const response = await post(
-    "luma-studio",
-    {},
-    { contentLength: "not-a-length" },
-  );
-
-  assert.equal(response.status, 400);
-  const payload = (await response.json()) as {
-    error: { code: string; message: string };
+test("invalid content lengths reject an otherwise valid request before parsing", async () => {
+  const validBody = {
+    serviceId,
+    customerName: "Content Length Customer",
+    contactDetail: "content-length@example.test",
+    preferredTime: "2033-09-03T10:30",
   };
-  assert.equal(payload.error.code, "VALIDATION_FAILED");
-  assert.equal(payload.error.message, failureMessage);
+
+  for (const contentLength of ["not-a-length", "-1", "1e3", "0x20"]) {
+    const response = await post("luma-studio", validBody, { contentLength });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as {
+      error: { code: string; message: string };
+    };
+    assert.equal(payload.error.code, "VALIDATION_FAILED");
+    assert.equal(payload.error.message, failureMessage);
+  }
+
+  const oversized = await post("luma-studio", validBody, {
+    contentLength: "8193",
+  });
+  assert.equal(oversized.status, 413);
 });
 
 test("malformed UTF-8 request streams are cancelled", async () => {
