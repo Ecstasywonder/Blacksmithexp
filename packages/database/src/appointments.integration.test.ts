@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
-import { requestAppointment } from "@chairly/domain";
+import {
+  appointmentRequestIdentity,
+  requestAppointment,
+} from "@chairly/domain";
 import postgres from "postgres";
 import {
   createDatabase,
@@ -73,11 +76,11 @@ test(
         await transaction`select set_config('app.tenant_id', ${tenantId}, true)`;
         await transaction`delete from outbox_events where tenant_id = ${tenantId}`;
         await transaction`delete from audit_logs where tenant_id = ${tenantId}`;
+        await transaction`delete from idempotency_keys where tenant_id = ${tenantId}`;
         await transaction`delete from appointment_events where tenant_id = ${tenantId}`;
         await transaction`delete from appointment_services where tenant_id = ${tenantId}`;
         await transaction`delete from appointments where tenant_id = ${tenantId}`;
         await transaction`delete from customers where tenant_id = ${tenantId}`;
-        await transaction`delete from idempotency_keys where tenant_id = ${tenantId}`;
         await transaction`delete from availability_exceptions where tenant_id = ${tenantId}`;
         await transaction`delete from weekly_availability where tenant_id = ${tenantId}`;
         await transaction`delete from staff_services where tenant_id = ${tenantId}`;
@@ -88,6 +91,19 @@ test(
         await transaction`delete from tenant_members where tenant_id = ${tenantId}`;
         await transaction`delete from booking_settings where tenant_id = ${tenantId}`;
         await transaction`delete from tenants where id = ${tenantId}`;
+      });
+    }
+
+    async function countIdempotencyKey(tenantId: string, key: string) {
+      return administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantId}, true)`;
+        const rows = await transaction<{ count: number }[]>`
+          select count(*)::int as count
+          from idempotency_keys
+          where tenant_id = ${tenantId}
+            and key = ${key}
+        `;
+        return rows[0]?.count ?? 0;
       });
     }
 
@@ -262,6 +278,30 @@ test(
       assert.equal(resultA.ok, true);
       assert.equal(resultB.ok, true);
 
+      const expiredTenantAKey = `expired:${randomUUID()}`;
+      const expiredTenantBKey = `expired:${randomUUID()}`;
+      for (const [tenant, key] of [
+        [tenantA, expiredTenantAKey],
+        [tenantB, expiredTenantBKey],
+      ] as const) {
+        await administrator.begin(async (transaction) => {
+          await transaction`select set_config('app.tenant_id', ${tenant.id}, true)`;
+          await transaction`
+            insert into idempotency_keys (
+              tenant_id,
+              key,
+              request_hash,
+              expires_at
+            ) values (
+              ${tenant.id},
+              ${key},
+              ${randomUUID()},
+              now() - interval '1 minute'
+            )
+          `;
+        });
+      }
+
       const replayA = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
@@ -269,56 +309,73 @@ test(
         idempotencyKey: tenantAIdempotencyKey,
         requestId: randomUUID(),
       });
-      assert.deepEqual(replayA, resultA);
-
-      const unrelatedExpiredKey = randomUUID();
-      await administrator.begin(async (transaction) => {
-        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
-        await transaction`
-          update idempotency_keys
-          set expires_at = now() - interval '1 minute'
-          where tenant_id = ${tenantA.id}
-            and key = ${tenantAIdempotencyKey}
-        `;
-        await transaction`
-          insert into idempotency_keys (
-            tenant_id,
-            key,
-            request_hash,
-            response_status,
-            response_body,
-            expires_at
-          ) values (
-            ${tenantA.id},
-            ${unrelatedExpiredKey},
-            'expired-test-hash',
-            409,
-            '{"ok":false,"reason":"slot_unavailable"}'::jsonb,
-            now() - interval '2 days'
-          )
-        `;
+      assert.ok(resultA.ok);
+      assert.equal(resultA.outcome, "created");
+      assert.ok(replayA.ok);
+      assert.deepEqual(replayA, {
+        ok: true,
+        appointment: resultA.appointment,
+        outcome: "duplicate",
       });
-      const expiredRetry = await requestAppointment(repository, {
+      assert.equal(await countIdempotencyKey(tenantA.id, expiredTenantAKey), 0);
+      assert.equal(await countIdempotencyKey(tenantB.id, expiredTenantBKey), 1);
+
+      const normalizedDuplicateA = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "ada   okafor",
+        contactDetail: "  ada@example.TEST ",
+        preferredTime: identicalCustomer.preferredTime,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(normalizedDuplicateA, replayA);
+
+      const distinctTimeA = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
         ...identicalCustomer,
-        idempotencyKey: tenantAIdempotencyKey,
+        preferredTime: `${appointmentDate}T09:00`,
+        idempotencyKey: randomUUID(),
         requestId: randomUUID(),
       });
-      assert.deepEqual(expiredRetry, {
-        ok: false,
-        reason: "slot_unavailable",
-      });
-      const expiredRows = await administrator.begin(async (transaction) => {
-        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
-        return transaction<{ count: number }[]>`
-          select count(*)::int as count
-          from idempotency_keys
-          where tenant_id = ${tenantA.id}
-            and key = ${unrelatedExpiredKey}
-        `;
-      });
-      assert.equal(expiredRows[0]?.count, 0);
+      assert.equal(distinctTimeA.ok && distinctTimeA.outcome, "created");
+      assert.notEqual(
+        distinctTimeA.ok ? distinctTimeA.appointment.id : null,
+        resultA.ok ? resultA.appointment.id : null,
+      );
+
+      const simultaneousCommand = {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Concurrent duplicate",
+        contactDetail: "concurrent-duplicate@example.test",
+        preferredTime: `${appointmentDate}T16:00`,
+      };
+      const simultaneousResults = await Promise.all([
+        requestAppointment(repository, {
+          ...simultaneousCommand,
+          idempotencyKey: randomUUID(),
+          requestId: randomUUID(),
+        }),
+        requestAppointment(repository, {
+          ...simultaneousCommand,
+          idempotencyKey: randomUUID(),
+          requestId: randomUUID(),
+        }),
+      ]);
+      assert.deepEqual(
+        simultaneousResults.map((result) => result.ok && result.outcome).sort(),
+        ["created", "duplicate"],
+      );
+      assert.equal(
+        new Set(
+          simultaneousResults.flatMap((result) =>
+            result.ok ? [result.appointment.id] : [],
+          ),
+        ).size,
+        1,
+      );
 
       const mismatchedReplay = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
@@ -339,25 +396,29 @@ test(
       ]);
       assert.ok(pendingA);
       assert.ok(pendingB);
-      assert.equal(pendingA.appointments.length, 1);
+      assert.equal(pendingA.appointments.length, 3);
       assert.equal(pendingB.appointments.length, 1);
+      const originalPendingA = pendingA.appointments.find(
+        (appointment) =>
+          appointment.customerContact === identicalCustomer.contactDetail &&
+          appointment.preferredTime === identicalCustomer.preferredTime,
+      );
+      assert.ok(originalPendingA);
       assert.deepEqual(
-        pendingA.appointments.map((appointment) => ({
-          service: appointment.serviceName,
-          preferredTime: appointment.preferredTime,
-          customerName: appointment.customerName,
-          customerContact: appointment.customerContact,
-          status: appointment.status,
-        })),
-        [
-          {
-            service: "Identical service",
-            preferredTime: `${appointmentDate}T10:30`,
-            customerName: "  Ada Okafor  ",
-            customerContact: "Ada@Example.test",
-            status: "pending",
-          },
-        ],
+        {
+          service: originalPendingA.serviceName,
+          preferredTime: originalPendingA.preferredTime,
+          customerName: originalPendingA.customerName,
+          customerContact: originalPendingA.customerContact,
+          status: originalPendingA.status,
+        },
+        {
+          service: "Identical service",
+          preferredTime: `${appointmentDate}T10:30`,
+          customerName: "  Ada Okafor  ",
+          customerContact: "Ada@Example.test",
+          status: "pending",
+        },
       );
       assert.notEqual(
         pendingA.appointments[0]?.id,
@@ -405,13 +466,16 @@ test(
         });
       }
 
-      const outsideWeeklyHours = await requestAppointment(repository, {
+      const retryableRequest = {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
         customerName: "Outside hours",
         contactDetail: "outside-hours@example.test",
         preferredTime: `${appointmentDate}T19:00`,
         idempotencyKey: randomUUID(),
+      };
+      const outsideWeeklyHours = await requestAppointment(repository, {
+        ...retryableRequest,
         requestId: randomUUID(),
       });
       assert.deepEqual(outsideWeeklyHours, {
@@ -440,15 +504,62 @@ test(
         `;
       });
       const availableException = await requestAppointment(repository, {
-        tenantSlug: tenantA.slug,
-        serviceId: tenantA.serviceId,
-        customerName: "Available exception",
-        contactDetail: "available-exception@example.test",
-        preferredTime: `${appointmentDate}T19:00`,
-        idempotencyKey: randomUUID(),
+        ...retryableRequest,
         requestId: randomUUID(),
       });
       assert.equal(availableException.ok, true);
+
+      const expiredFingerprintCommand = {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        customerName: "Expired fingerprint",
+        contactDetail: "expired-fingerprint@example.test",
+        preferredTime: `${futureLocalDate(31)}T10:30`,
+      };
+      const expiredFingerprintHash = createHash("sha256")
+        .update(appointmentRequestIdentity(expiredFingerprintCommand))
+        .digest("hex");
+      const expiredFingerprintKey = `public-fingerprint:v1:${expiredFingerprintHash}`;
+      const cleanupBlockerPrefix = `cleanup-blocker:${randomUUID()}:`;
+      await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        await transaction`
+          insert into idempotency_keys (
+            tenant_id,
+            key,
+            request_hash,
+            expires_at
+          )
+          select
+            ${tenantA.id},
+            ${cleanupBlockerPrefix} || sequence::text,
+            'expired-cleanup-blocker',
+            now() - interval '2 days'
+          from generate_series(1, 100) as sequence
+        `;
+        await transaction`
+          insert into idempotency_keys (
+            tenant_id,
+            key,
+            request_hash,
+            expires_at
+          ) values (
+            ${tenantA.id},
+            ${expiredFingerprintKey},
+            ${expiredFingerprintHash},
+            now() - interval '1 minute'
+          )
+        `;
+      });
+      const expiredFingerprintRetry = await requestAppointment(repository, {
+        ...expiredFingerprintCommand,
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.equal(
+        expiredFingerprintRetry.ok && expiredFingerprintRetry.outcome,
+        "created",
+      );
 
       const bufferConflict = await requestAppointment(repository, {
         tenantSlug: tenantA.slug,
@@ -552,10 +663,10 @@ test(
           `;
       });
       assert.deepEqual(aggregateCounts[0], {
-        appointments: 3,
-        events: 3,
-        audits: 3,
-        outbox: 3,
+        appointments: 6,
+        events: 6,
+        audits: 6,
+        outbox: 6,
       });
     } finally {
       for (const tenant of tenants) {

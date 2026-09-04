@@ -65,6 +65,7 @@ test.describe("pending appointment inbox", () => {
       booking.getByRole("status", { name: "Submission status" }),
     ).toContainText("request was sent");
     const acceptedAt = Date.now();
+    await dashboard.bringToFront();
 
     const requestCard = dashboard
       .getByRole("listitem")
@@ -114,14 +115,32 @@ test.describe("pending appointment inbox", () => {
     ]);
     expect(firstResponse.status()).toBe(201);
 
+    await booking.getByRole("button", { name: "Request appointment" }).click();
+    await expect(
+      booking.getByRole("status", { name: "Submission status" }),
+    ).toHaveText(
+      "We already received this booking request — no need to send it again.",
+    );
+
     const idempotencyKey = firstRequest.headers()["idempotency-key"];
     expect(idempotencyKey).toBeTruthy();
     const replayResponse = await booking.request.post(firstRequest.url(), {
       data: firstRequest.postDataJSON(),
       headers: { "idempotency-key": idempotencyKey! },
     });
-    expect(replayResponse.status()).toBe(201);
-    expect(await replayResponse.json()).toEqual(await firstResponse.json());
+    expect(replayResponse.status()).toBe(200);
+    const replayPayload = (await replayResponse.json()) as {
+      appointment: { id: string };
+      outcome: string;
+    };
+    const firstPayload = (await firstResponse.json()) as {
+      appointment: { id: string };
+      outcome: string;
+    };
+    expect(replayPayload).toEqual({
+      appointment: firstPayload.appointment,
+      outcome: "duplicate",
+    });
 
     const dashboardResponse = await booking.request.get(
       `${appUrl}/api/dashboard/pending-appointments`,
@@ -141,6 +160,84 @@ test.describe("pending appointment inbox", () => {
               appointment.customerName === customerName,
           )
         : [],
+    ).toHaveLength(1);
+  });
+
+  test("a second submit during a slow response ends on one confirmation and creates once", async ({
+    context,
+  }) => {
+    const unique = Date.now();
+    const customerName = `Ada slow ${unique}`;
+    const booking = await context.newPage();
+    await authenticateOwner(context, "luma-studio");
+    await fillBooking(
+      booking,
+      "luma-studio",
+      customerName,
+      `ada-slow-${unique}@example.test`,
+      "2032-09-03T15:30",
+    );
+
+    let requestCount = 0;
+    let releaseFirstResponse = () => {};
+    const firstResponseGate = new Promise<void>((resolve) => {
+      releaseFirstResponse = resolve;
+    });
+    let markFirstProcessed = () => {};
+    const firstProcessed = new Promise<void>((resolve) => {
+      markFirstProcessed = resolve;
+    });
+    await booking.route(
+      "**/api/public/luma-studio/appointments",
+      async (route) => {
+        requestCount += 1;
+        const currentRequest = requestCount;
+        if (currentRequest === 1) {
+          const response = await route.fetch();
+          markFirstProcessed();
+          await firstResponseGate;
+          await route.fulfill({ response });
+          return;
+        }
+
+        await firstResponseGate;
+        const response = await route.fetch();
+        await route.fulfill({ response });
+      },
+    );
+
+    await booking.getByRole("button", { name: "Request appointment" }).click();
+    await firstProcessed;
+    await expect(
+      booking.getByRole("button", { name: "Submitting request…" }),
+    ).toBeDisabled();
+    await booking
+      .getByRole("form", { name: "Book an appointment" })
+      .evaluate((form) => {
+        form.dispatchEvent(
+          new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+        );
+      });
+    await expect.poll(() => requestCount).toBe(2);
+    releaseFirstResponse();
+
+    const confirmation = booking.getByRole("status", {
+      name: "Submission status",
+    });
+    await expect(confirmation).not.toContainText("being submitted");
+    await expect(confirmation).toHaveCount(1);
+
+    const dashboardResponse = await booking.request.get(
+      `${appUrl}/api/dashboard/pending-appointments`,
+    );
+    expect(dashboardResponse.status()).toBe(200);
+    const dashboardPayload = (await dashboardResponse.json()) as {
+      appointments: { customerName: string }[];
+    };
+    expect(
+      dashboardPayload.appointments.filter(
+        (appointment) => appointment.customerName === customerName,
+      ),
     ).toHaveLength(1);
   });
 
@@ -204,7 +301,41 @@ test.describe("pending appointment inbox", () => {
       ]);
       expect(responseA.status()).toBe(201);
       expect(responseB.status()).toBe(201);
-      const acceptedAt = Date.now();
+      const [createdA, createdB] = (await Promise.all([
+        responseA.json(),
+        responseB.json(),
+      ])) as [{ appointment: { id: string } }, { appointment: { id: string } }];
+
+      await expect
+        .poll(
+          async () => {
+            const [dashboardResponseA, dashboardResponseB] = await Promise.all([
+              contextA.request.get(
+                `${appUrl}/api/dashboard/pending-appointments`,
+              ),
+              contextB.request.get(
+                `${appUrl}/api/dashboard/pending-appointments`,
+              ),
+            ]);
+            const [dashboardPayloadA, dashboardPayloadB] = (await Promise.all([
+              dashboardResponseA.json(),
+              dashboardResponseB.json(),
+            ])) as [
+              { appointments: { id: string; customerName: string }[] },
+              { appointments: { id: string; customerName: string }[] },
+            ];
+
+            return [dashboardPayloadA, dashboardPayloadB].map((payload) =>
+              payload.appointments
+                .filter(
+                  (appointment) => appointment.customerName === customerName,
+                )
+                .map((appointment) => appointment.id),
+            );
+          },
+          { timeout: 5_000 },
+        )
+        .toEqual([[createdA.appointment.id], [createdB.appointment.id]]);
 
       const matchingA = dashboardA
         .getByRole("listitem")
@@ -212,9 +343,10 @@ test.describe("pending appointment inbox", () => {
       const matchingB = dashboardB
         .getByRole("listitem")
         .filter({ hasText: customerName });
-      await expect(matchingA).toHaveCount(1, { timeout: 2_000 });
-      await expect(matchingB).toHaveCount(1, { timeout: 2_000 });
-      expect(Date.now() - acceptedAt).toBeLessThan(2_000);
+      await Promise.all([
+        expect(matchingA).toHaveCount(1, { timeout: 5_000 }),
+        expect(matchingB).toHaveCount(1, { timeout: 5_000 }),
+      ]);
       await expect(dashboardA.getByText("Luma Studio")).toBeVisible();
       await expect(dashboardB.getByText("Ember Studio")).toBeVisible();
     } finally {

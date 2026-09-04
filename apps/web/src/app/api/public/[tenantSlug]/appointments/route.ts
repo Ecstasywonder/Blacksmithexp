@@ -11,11 +11,12 @@ import {
 
 const failureMessage = "We couldn't send your request. Please try again.";
 const idempotencyKeyPattern = /^[A-Za-z0-9._:-]{8,200}$/;
-const maximumRequestBodyBytes = 8_192;
+const contentLengthPattern = /^\d+$/;
+const maxRequestBodyBytes = 8_192;
 
 type RequestBodyResult =
   | Readonly<{ ok: true; body: string }>
-  | Readonly<{ ok: false; reason: "invalid" | "too_large" }>;
+  | Readonly<{ ok: false; reason: "too_large" | "unreadable" }>;
 
 type PublicAppointmentRouteContext = {
   params: Promise<{ tenantSlug: string }>;
@@ -33,13 +34,15 @@ function errorResponse(
   );
 }
 
-async function readRequestBody(request: Request): Promise<RequestBodyResult> {
+async function readLimitedRequestBody(
+  request: Request,
+): Promise<RequestBodyResult> {
   if (!request.body) {
     return { ok: true, body: "" };
   }
 
   const reader = request.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let body = "";
   let bytesRead = 0;
 
@@ -47,24 +50,19 @@ async function readRequestBody(request: Request): Promise<RequestBodyResult> {
     while (true) {
       const chunk = await reader.read();
       if (chunk.done) {
-        body += decoder.decode();
-        return { ok: true, body };
+        return { ok: true, body: body + decoder.decode() };
       }
 
       bytesRead += chunk.value.byteLength;
-      if (bytesRead > maximumRequestBodyBytes) {
-        try {
-          await reader.cancel();
-        } catch {
-          // The 413 response remains authoritative if cancellation races with
-          // a client disconnect.
-        }
+      if (bytesRead > maxRequestBodyBytes) {
+        await reader.cancel().catch(() => undefined);
         return { ok: false, reason: "too_large" };
       }
       body += decoder.decode(chunk.value, { stream: true });
     }
   } catch {
-    return { ok: false, reason: "invalid" };
+    await reader.cancel().catch(() => undefined);
+    return { ok: false, reason: "unreadable" };
   } finally {
     reader.releaseLock();
   }
@@ -101,12 +99,21 @@ export async function POST(
     return errorResponse(415, "VALIDATION_FAILED", requestId);
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > maximumRequestBodyBytes) {
-    return errorResponse(413, "VALIDATION_FAILED", requestId);
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader);
+    if (
+      !contentLengthPattern.test(contentLengthHeader) ||
+      !Number.isSafeInteger(contentLength)
+    ) {
+      return errorResponse(400, "VALIDATION_FAILED", requestId);
+    }
+    if (contentLength > maxRequestBodyBytes) {
+      return errorResponse(413, "VALIDATION_FAILED", requestId);
+    }
   }
 
-  const requestBody = await readRequestBody(request);
+  const requestBody = await readLimitedRequestBody(request);
   if (!requestBody.ok) {
     return errorResponse(
       requestBody.reason === "too_large" ? 413 : 400,
@@ -154,7 +161,10 @@ export async function POST(
       return errorResponse(status, code, requestId);
     }
 
-    return Response.json({ appointment: result.appointment }, { status: 201 });
+    return Response.json(
+      { appointment: result.appointment, outcome: result.outcome },
+      { status: result.outcome === "created" ? 201 : 200 },
+    );
   } catch {
     console.error("Public appointment request failed", { requestId });
     return errorResponse(500, "INTERNAL_ERROR", requestId);

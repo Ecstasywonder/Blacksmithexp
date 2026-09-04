@@ -11,20 +11,20 @@ The recommended starting point is a modular monolith. One Next.js application se
 
 ## 2. Technology decisions
 
-| Area | Decision | Rationale |
-| --- | --- | --- |
-| Web application | Next.js App Router + TypeScript | Server Components for tenant pages/read-heavy screens; Server Actions for first-party mutations; Route Handlers for public endpoints/webhooks |
-| Runtime | Node.js | Broad database and provider compatibility; no Edge-only constraint |
-| Database | PostgreSQL 16+ | Transactions, range/exclusion constraints, row-level security, mature managed options |
-| Data access | Drizzle ORM + generated SQL migrations | Typed schema/query layer while retaining explicit SQL control |
-| Validation | Zod at all external boundaries | Shared runtime validation and stable error mapping |
-| Authentication | Managed OIDC provider behind an application adapter | Avoid storing passwords; keep provider-specific code at the edge of the system |
-| Authorization | Tenant membership RBAC plus PostgreSQL RLS | Defense in depth; authorization remains server-side |
-| Assets | S3-compatible object storage + CDN | Direct uploads, resizing pipeline, and durable tenant media |
-| Email | Transactional email provider behind a notifier interface | Provider portability and retryability |
-| Background work | Transactional outbox polled by a worker; durable queue when scale requires it | No lost notifications and no distributed transaction with providers |
-| Observability | Structured logs, OpenTelemetry traces, error tracking, metrics | Correlation from public request through database and worker |
-| Hosting | Managed Node.js web/worker services and managed PostgreSQL | Low operational overhead; platform choice remains replaceable |
+| Area            | Decision                                                                      | Rationale                                                                                                                                     |
+| --------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Web application | Next.js App Router + TypeScript                                               | Server Components for tenant pages/read-heavy screens; Server Actions for first-party mutations; Route Handlers for public endpoints/webhooks |
+| Runtime         | Node.js                                                                       | Broad database and provider compatibility; no Edge-only constraint                                                                            |
+| Database        | PostgreSQL 16+                                                                | Transactions, range/exclusion constraints, row-level security, mature managed options                                                         |
+| Data access     | Drizzle ORM + generated SQL migrations                                        | Typed schema/query layer while retaining explicit SQL control                                                                                 |
+| Validation      | Zod at all external boundaries                                                | Shared runtime validation and stable error mapping                                                                                            |
+| Authentication  | Managed OIDC provider behind an application adapter                           | Avoid storing passwords; keep provider-specific code at the edge of the system                                                                |
+| Authorization   | Tenant membership RBAC plus PostgreSQL RLS                                    | Defense in depth; authorization remains server-side                                                                                           |
+| Assets          | S3-compatible object storage + CDN                                            | Direct uploads, resizing pipeline, and durable tenant media                                                                                   |
+| Email           | Transactional email provider behind a notifier interface                      | Provider portability and retryability                                                                                                         |
+| Background work | Transactional outbox polled by a worker; durable queue when scale requires it | No lost notifications and no distributed transaction with providers                                                                           |
+| Observability   | Structured logs, OpenTelemetry traces, error tracking, metrics                | Correlation from public request through database and worker                                                                                   |
+| Hosting         | Managed Node.js web/worker services and managed PostgreSQL                    | Low operational overhead; platform choice remains replaceable                                                                                 |
 
 Specific vendors and exact dependency versions should be recorded in ADRs and lockfiles at implementation kickoff. The domain design does not depend on a particular auth, hosting, email, or storage vendor.
 
@@ -71,17 +71,17 @@ Trust boundaries:
 
 ## 5. Application modules
 
-| Module | Responsibilities |
-| --- | --- |
-| Identity | Map OIDC subject to local user, session claims, sign-in callbacks |
-| Tenancy | Tenant lifecycle, slug resolution, memberships, roles, tenant context |
-| Catalog | Locations, services, staff, service/staff assignment, publication prerequisites |
-| Scheduling | Weekly availability, exceptions, slot generation, timezone conversion |
-| Appointments | Booking transaction, status machine, customer management, appointment history |
-| Content | Landing-page profile, social links, policies, assets, publication |
-| Notifications | Outbox events, templates, provider delivery, retries, manage links |
-| Audit | Append-only security and business activity records |
-| Administration | Suspension, support grants, operational views; separately authorized |
+| Module         | Responsibilities                                                                |
+| -------------- | ------------------------------------------------------------------------------- |
+| Identity       | Map OIDC subject to local user, session claims, sign-in callbacks               |
+| Tenancy        | Tenant lifecycle, slug resolution, memberships, roles, tenant context           |
+| Catalog        | Locations, services, staff, service/staff assignment, publication prerequisites |
+| Scheduling     | Weekly availability, exceptions, slot generation, timezone conversion           |
+| Appointments   | Booking transaction, status machine, customer management, appointment history   |
+| Content        | Landing-page profile, social links, policies, assets, publication               |
+| Notifications  | Outbox events, templates, provider delivery, retries, manage links              |
+| Audit          | Append-only security and business activity records                              |
+| Administration | Suspension, support grants, operational views; separately authorized            |
 
 Modules communicate through use-case functions and domain events, not by importing another module's internal repository.
 
@@ -136,14 +136,14 @@ RLS is defense in depth, not the sole authorization mechanism. Role permissions 
 
 ### Roles and permissions
 
-| Permission | Owner | Manager | Staff |
-| --- | --- | --- | --- |
-| View tenant dashboard | Yes | Yes | Limited |
-| Manage appointments | Yes | Yes | Assigned appointments, policy-dependent |
-| Manage services/staff/hours | Yes | Yes | Own availability, policy-dependent |
-| Manage page/settings | Yes | Yes | No |
-| Invite/remove members | Yes | Optional | No |
-| Transfer/delete tenant | Yes | No | No |
+| Permission                  | Owner | Manager  | Staff                                   |
+| --------------------------- | ----- | -------- | --------------------------------------- |
+| View tenant dashboard       | Yes   | Yes      | Limited                                 |
+| Manage appointments         | Yes   | Yes      | Assigned appointments, policy-dependent |
+| Manage services/staff/hours | Yes   | Yes      | Own availability, policy-dependent      |
+| Manage page/settings        | Yes   | Yes      | No                                      |
+| Invite/remove members       | Yes   | Optional | No                                      |
+| Transfer/delete tenant      | Yes   | No       | No                                      |
 
 Central permission constants and policy functions are used everywhere; route-level checks alone are insufficient.
 
@@ -273,7 +273,7 @@ Worker leases recover after crashes. Delivery is at least once; handlers and pro
 - Input validation and output encoding are mandatory at trust boundaries.
 - Content Security Policy, HSTS, frame restrictions, safe referrer policy, and permissions policy are configured centrally.
 - CSRF tokens/origin checks protect cookie-authenticated mutations.
-- Public booking, availability, sign-in, token, upload, and webhook endpoints have risk-based rate limits.
+- Public booking, availability, sign-in, token, upload, and webhook endpoints have risk-based rate limits. Public booking scopes are tenant-and-client-specific. Self-hosted deployments keep the origin private and accept client identity only when a trusted gateway supplies exactly one client IP plus a valid HMAC signature in overwritten headers; the route fails closed if that authenticated identity is unavailable.
 - File uploads use signed direct uploads, content sniffing, allowlisted formats, size limits, randomized keys, and image processing before publication.
 - SSRF defenses restrict any server-side remote fetch.
 - Secrets are injected per environment and rotated; `.env.example` contains names only.

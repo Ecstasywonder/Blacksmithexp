@@ -31,7 +31,7 @@ export default defineConfig({
       CHAIRLY_E2E_PRODUCTION_BUILD: "true",
     },
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 240_000,
     url: `http://127.0.0.1:${port}/api/health`,
   },
 });

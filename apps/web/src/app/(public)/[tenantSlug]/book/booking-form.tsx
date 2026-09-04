@@ -20,7 +20,8 @@ type BookingField =
   "serviceId" | "customerName" | "contactDetail" | "preferredTime";
 
 type BookingFieldErrors = Partial<Record<BookingField, string>>;
-type SubmissionState = "idle" | "submitting" | "success" | "error";
+type SubmissionState =
+  "idle" | "submitting" | "success" | "duplicate" | "error";
 
 const bookingFieldOrder: readonly BookingField[] = [
   "serviceId",
@@ -32,6 +33,8 @@ const bookingFieldOrder: readonly BookingField[] = [
 const localDateTimePattern =
   /^(?:\d{4})-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d$/;
 const failureMessage = "We couldn't send your request. Please try again.";
+const duplicateMessage =
+  "We already received this booking request — no need to send it again.";
 const appointmentRequestsChannel = "chairly-appointment-requests";
 const appointmentRequestSignalKey = "chairly:appointment-requested";
 
@@ -155,12 +158,25 @@ export function BookingForm({
         },
       );
 
-      if (response.ok && typeof BroadcastChannel !== "undefined") {
+      const payload: unknown = response.ok ? await response.json() : null;
+      const outcome =
+        typeof payload === "object" &&
+        payload !== null &&
+        "outcome" in payload &&
+        payload.outcome === "duplicate"
+          ? "duplicate"
+          : "created";
+
+      if (
+        response.ok &&
+        outcome === "created" &&
+        typeof BroadcastChannel !== "undefined"
+      ) {
         const channel = new BroadcastChannel(appointmentRequestsChannel);
         channel.postMessage({ tenantSlug });
         channel.close();
       }
-      if (response.ok) {
+      if (response.ok && outcome === "created") {
         try {
           window.localStorage.setItem(
             appointmentRequestSignalKey,
@@ -170,7 +186,13 @@ export function BookingForm({
           // The dashboard also continues polling when storage is unavailable.
         }
       }
-      setSubmissionState(response.ok ? "success" : "error");
+      setSubmissionState(
+        response.ok
+          ? outcome === "duplicate"
+            ? "duplicate"
+            : "success"
+          : "error",
+      );
     } catch {
       setSubmissionState("error");
     }
@@ -366,9 +388,11 @@ export function BookingForm({
             ? "Your appointment request is being submitted."
             : submissionState === "success"
               ? "Your appointment request was sent."
-              : submissionState === "error"
-                ? failureMessage
-                : "No payment is taken now."}
+              : submissionState === "duplicate"
+                ? duplicateMessage
+                : submissionState === "error"
+                  ? failureMessage
+                  : "No payment is taken now."}
         </p>
       </div>
     </form>

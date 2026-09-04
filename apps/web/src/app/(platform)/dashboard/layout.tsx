@@ -2,7 +2,9 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 /** Shared dashboard shell; authorization must occur before tenant data is read. */
-export default function DashboardLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default function DashboardLayout({
+  children,
+}: Readonly<{ children: ReactNode }>) {
   return (
     <div className="dashboard-shell">
       <aside>

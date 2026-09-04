@@ -1,14 +1,16 @@
 import "server-only";
 
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import { consumePublicBookingRateLimit } from "@chairly/database";
 import { getDatabase } from "./database";
 import { isSyntheticBookingEnvironment } from "./public-booking-catalog";
 
 const maxRequests = 20;
 const windowSeconds = 60;
-const untrustedClientScope = "untrusted-client";
-const syntheticClientHeader = "x-chairly-test-client-id";
+const headerNamePattern = /^[a-z0-9][a-z0-9-]{0,127}$/;
+const trustedProxySignatureHeader = "x-chairly-client-ip-signature";
+const signaturePattern = /^[a-f0-9]{64}$/i;
 
 const syntheticState = globalThis as typeof globalThis & {
   chairlySyntheticPublicRateLimits?: Map<
@@ -17,28 +19,101 @@ const syntheticState = globalThis as typeof globalThis & {
   >;
 };
 
-export function trustedRateLimitClientAddress(request: Request): string {
-  // Vercel overwrites its forwarding header at the edge, but ordinary
-  // forwarded-IP headers are attacker-controlled on an unverified runtime.
-  // Falling back to one shared scope is deliberately conservative: it may
-  // reduce availability on a misconfigured host, but it cannot be bypassed by
-  // rotating a browser-supplied header.
-  if (process.env.VERCEL === "1") {
-    const vercelAddress = request.headers
-      .get("x-vercel-forwarded-for")
-      ?.split(",")
-      .at(-1)
-      ?.trim();
-    if (vercelAddress) {
-      return vercelAddress;
-    }
-  }
-
-  return untrustedClientScope;
+function firstForwardedAddress(value: string | null): string | null {
+  return value?.split(",", 1)[0]?.trim() || null;
 }
 
-function syntheticClientIdentity(request: Request): string {
-  return request.headers.get(syntheticClientHeader)?.trim() || "synthetic";
+function requireClientIp(value: string | null, headerName: string): string {
+  const address = firstForwardedAddress(value);
+  if (!address || isIP(address) === 0) {
+    throw new Error(`${headerName} must contain a valid client IP address`);
+  }
+  return address;
+}
+
+function requireSingleClientIp(
+  value: string | null,
+  headerName: string,
+): string {
+  const address = value?.trim() ?? "";
+  if (!address || address.includes(",") || isIP(address) === 0) {
+    throw new Error(
+      `${headerName} must contain exactly one valid client IP address`,
+    );
+  }
+  return address;
+}
+
+function verifyTrustedProxySignature(
+  request: Request,
+  headerName: string,
+  address: string,
+): void {
+  const secret = process.env.TRUSTED_PROXY_CLIENT_IP_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_SECRET must contain at least 32 characters",
+    );
+  }
+
+  const suppliedSignature = request.headers
+    .get(trustedProxySignatureHeader)
+    ?.trim();
+  if (!suppliedSignature || !signaturePattern.test(suppliedSignature)) {
+    throw new Error("Trusted proxy client identity signature is invalid");
+  }
+
+  const expectedSignature = createHmac("sha256", secret)
+    .update(`client-ip:v1\0${headerName}\0${address}`)
+    .digest();
+  const suppliedSignatureBytes = Buffer.from(suppliedSignature, "hex");
+  if (!timingSafeEqual(expectedSignature, suppliedSignatureBytes)) {
+    throw new Error("Trusted proxy client identity signature is invalid");
+  }
+}
+
+export function resolveDeployedPublicBookingClientAddress(
+  request: Request,
+): string {
+  if (process.env.VERCEL === "1") {
+    return requireClientIp(
+      request.headers.get("x-vercel-forwarded-for"),
+      "x-vercel-forwarded-for",
+    );
+  }
+
+  const trustedHeaderName =
+    process.env.TRUSTED_PROXY_CLIENT_IP_HEADER?.trim().toLowerCase();
+  if (!trustedHeaderName) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_HEADER is required outside Vercel",
+    );
+  }
+  if (!headerNamePattern.test(trustedHeaderName)) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_HEADER is not a valid header name",
+    );
+  }
+
+  if (trustedHeaderName === trustedProxySignatureHeader) {
+    throw new Error(
+      "TRUSTED_PROXY_CLIENT_IP_HEADER cannot be the signature header",
+    );
+  }
+
+  const address = requireSingleClientIp(
+    request.headers.get(trustedHeaderName),
+    trustedHeaderName,
+  );
+  verifyTrustedProxySignature(request, trustedHeaderName, address);
+  return address;
+}
+
+function clientAddress(request: Request): string {
+  if (isSyntheticBookingEnvironment()) {
+    return request.headers.get("x-chairly-test-client-ip")?.trim() || "unknown";
+  }
+  return resolveDeployedPublicBookingClientAddress(request);
 }
 
 function rateLimitSecret(): string {
@@ -51,16 +126,14 @@ function rateLimitSecret(): string {
 
 function scopeHash(request: Request, tenantSlug: string): string {
   return createHmac("sha256", rateLimitSecret())
-    .update(
-      `${tenantSlug.trim().toLowerCase()}\0${trustedRateLimitClientAddress(request)}`,
-    )
+    .update(`${tenantSlug.trim().toLowerCase()}\0${clientAddress(request)}`)
     .digest("hex");
 }
 
 function consumeSyntheticRateLimit(request: Request, tenantSlug: string) {
   syntheticState.chairlySyntheticPublicRateLimits ??= new Map();
   const limits = syntheticState.chairlySyntheticPublicRateLimits;
-  const key = `${tenantSlug.trim().toLowerCase()}\0${syntheticClientIdentity(request)}`;
+  const key = `${tenantSlug.trim().toLowerCase()}\0${clientAddress(request)}`;
   const now = Date.now();
   const current = limits.get(key);
   if (!current || now - current.windowStartedAt >= windowSeconds * 1_000) {
