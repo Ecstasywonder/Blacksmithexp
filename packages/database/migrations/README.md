@@ -15,3 +15,18 @@ The runtime must wrap tenant work in a transaction and use `SET LOCAL app.tenant
 ## `0003` rollout notes
 
 Recreating the GiST exclusion constraint requires a table lock while PostgreSQL validates existing appointment ranges. Apply `0003_booking_guards_and_owner_identity.sql` during a controlled low-traffic migration window and confirm existing pending/confirmed rows do not overlap when service buffers are treated as zero. Grant only `EXECUTE` on the two new `app` functions to the runtime role after the migration; do not grant direct access to `public_endpoint_rate_limits`.
+
+BEW-005 verification found that the original `0003` could not commit on
+PostgreSQL 16: subtracting an interval from `timestamptz` is not immutable and
+therefore cannot appear in its exclusion index. The unappliable expression is
+corrected to convert each instant to an explicit UTC timestamp before applying
+minute buffers and building a `tsrange`. Capacity still uses absolute UTC
+instants and reserves both pending and confirmed appointments. This does not
+change service scheduling policy or rely on the connection's timezone.
+
+This repair is for databases where `0003` has not successfully applied. If a
+deployment records a checksum for an independently modified/applied `0003`,
+do not rewrite its migration ledger or run this repair over it: reconcile that
+deployment through a separately reviewed forward migration. The runner retains
+its checksum mismatch protection. Verify on a fresh PostgreSQL 16 database and
+run the migration command twice to check replay before rollout.

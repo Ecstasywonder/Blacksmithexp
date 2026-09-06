@@ -204,3 +204,37 @@ test("chunked request bodies are cancelled as soon as they exceed 8 KiB", async 
   assert.equal(response.status, 413);
   assert.equal(cancelled, true);
 });
+
+for (const [field, invalidValue, expectedMessage] of [
+  ["serviceId", "not-a-uuid", "Choose a service to continue."],
+  ["customerName", " ", "Enter your name (120 characters or fewer)"],
+  ["contactDetail", " ", "Enter your contact detail (254 characters or fewer)"],
+  [
+    "preferredTime",
+    "2033-02-30T10:30",
+    "Choose a valid preferred date and time",
+  ],
+] as const) {
+  test(`validation response names ${field} and does not echo input or write a booking`, async () => {
+    const { getSyntheticOwnerPendingAppointments } =
+      await import("./synthetic-appointments");
+    const before =
+      getSyntheticOwnerPendingAppointments("luma-studio")?.appointments.length;
+    const response = await post("luma-studio", {
+      serviceId,
+      customerName: "Contract customer",
+      contactDetail: "contract@example.test",
+      preferredTime: "2033-09-03T10:30",
+      [field]: invalidValue,
+    });
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.deepEqual(payload.error.fieldErrors, { [field]: [expectedMessage] });
+    assert.equal(payload.error.message, failureMessage);
+    assert.ok(payload.error.requestId);
+    assert.equal(
+      getSyntheticOwnerPendingAppointments("luma-studio")?.appointments.length,
+      before,
+    );
+  });
+}

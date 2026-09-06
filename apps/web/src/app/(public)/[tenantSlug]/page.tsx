@@ -7,7 +7,9 @@ type TenantPageProps = { params: Promise<{ tenantSlug: string }> };
  * Placeholder metadata only. The implemented route must resolve a published
  * tenant on the server and must never trust the slug as authorization context.
  */
-export async function generateMetadata({ params }: TenantPageProps): Promise<Metadata> {
+export async function generateMetadata({
+  params,
+}: TenantPageProps): Promise<Metadata> {
   const { tenantSlug } = await params;
   return {
     title: tenantSlug,
@@ -24,7 +26,10 @@ export default async function TenantPage({ params }: TenantPageProps) {
       <section className="hero">
         <p className="eyebrow">Tenant page scaffold</p>
         <h1>{tenantSlug}</h1>
-        <p>Published profile, locations, staff, services, hours, and policy content will be loaded on the server.</p>
+        <p>
+          Published profile, locations, staff, services, hours, and policy
+          content will be loaded on the server.
+        </p>
         <Link className="button" href={`/${tenantSlug}/book`}>
           Book an appointment
         </Link>

@@ -434,8 +434,8 @@ test(
             ${tenantA.locationId},
             ${tenantA.staffId},
             'available',
-            (${`${appointmentDate}T18:30`}::timestamp at time zone 'Africa/Lagos'),
-            (${`${appointmentDate}T20:30`}::timestamp at time zone 'Africa/Lagos')
+            (${`${appointmentDate}T18:30`}::text::timestamp at time zone 'Africa/Lagos'),
+            (${`${appointmentDate}T20:30`}::text::timestamp at time zone 'Africa/Lagos')
           )
         `;
       });
@@ -479,8 +479,8 @@ test(
             ${tenantA.locationId},
             ${tenantA.staffId},
             'closed',
-            (${`${appointmentDate}T12:00`}::timestamp at time zone 'Africa/Lagos'),
-            (${`${appointmentDate}T13:30`}::timestamp at time zone 'Africa/Lagos')
+            (${`${appointmentDate}T12:00`}::text::timestamp at time zone 'Africa/Lagos'),
+            (${`${appointmentDate}T13:30`}::text::timestamp at time zone 'Africa/Lagos')
           )
         `;
       });
@@ -533,6 +533,28 @@ test(
         ).length,
         1,
       );
+
+      // The database constraint must also protect writes that bypass the repository.
+      // These appointments do not overlap without buffers; both guarded statuses
+      // must reject the buffer overlap even with a non-UTC database session.
+      assert.ok(availableException.ok);
+      for (const status of ["pending", "confirmed"] as const) {
+        await assert.rejects(
+          administrator.begin(async (transaction) => {
+            await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+            await transaction`set local time zone 'America/New_York'`;
+            await transaction`
+              update appointments set
+                status = ${status},
+                starts_at = ${`${appointmentDate}T10:35:00Z`}::timestamptz,
+                ends_at = ${`${appointmentDate}T11:35:00Z`}::timestamptz
+              where tenant_id = ${tenantA.id}
+                and id = ${availableException.appointment.id}
+            `;
+          }),
+          { code: "23P01" },
+        );
+      }
 
       const aggregateCounts = await administrator.begin(async (transaction) => {
         await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;

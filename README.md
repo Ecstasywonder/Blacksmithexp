@@ -33,3 +33,17 @@ The deployment runtime role needs `EXECUTE` on `app.resolve_published_tenant(tex
 `POST /api/public/{tenantSlug}/appointments` accepts JSON containing `serviceId`, `customerName`, `contactDetail`, and a timezone-local `preferredTime` in `YYYY-MM-DDTHH:mm` form. Successful requests return `201` with an appointment ID and `pending` status. Invalid, unmatched, conflicting, rate-limited, and internal failures use the safe customer message documented in the product requirements and include a request ID; `429` responses include `Retry-After`.
 
 Set `RATE_LIMIT_SECRET` to a separate random value of at least 32 characters. Only an HMAC of the normalized business slug and proxy-supplied client address is persisted in rate-limit counters.
+
+## Sprint verification
+
+Run `pnpm verify:local` after installing Chromium with
+`pnpm --filter @chairly/e2e exec playwright install --with-deps chromium`.
+This provisions an isolated, disposable PostgreSQL 16 database and runs the
+required checks, including the real booking path and tenant isolation.
+See [booking regression guarantees](tests/e2e/README.md) for setup, the five
+acceptance criteria, pinned validation rules, and CI behaviour.
+
+Invalid booking fields additionally return `error.fieldErrors`: a mapping
+from field names to safe human-readable message arrays. Customer input is not
+echoed in error responses. Existing response codes and generic messages remain
+compatible.

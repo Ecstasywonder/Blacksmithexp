@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: chairly_verification
+      POSTGRES_USER: chairly_migrator
+      POSTGRES_PASSWORD: local-verification-only
+    ports:
+      - "127.0.0.1:${CHAIRLY_TEST_DB_PORT:-55435}:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./tools/verification:/verification:ro
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U chairly_migrator -d chairly_verification"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

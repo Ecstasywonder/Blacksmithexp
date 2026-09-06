@@ -13,9 +13,9 @@ ALTER TABLE appointments DROP CONSTRAINT appointments_no_staff_overlap;
 ALTER TABLE appointments ADD CONSTRAINT appointments_no_staff_overlap
   EXCLUDE USING gist (
     staff_id WITH =,
-    tstzrange(
-      starts_at - buffer_before_minutes_snapshot * interval '1 minute',
-      ends_at + buffer_after_minutes_snapshot * interval '1 minute',
+    tsrange(
+      (starts_at AT TIME ZONE 'UTC') - buffer_before_minutes_snapshot * interval '1 minute',
+      (ends_at AT TIME ZONE 'UTC') + buffer_after_minutes_snapshot * interval '1 minute',
       '[)'
     ) WITH &&
   )

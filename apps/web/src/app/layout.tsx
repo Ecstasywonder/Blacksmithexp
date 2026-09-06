@@ -8,10 +8,13 @@ export const metadata: Metadata = {
     default: "Chairly",
     template: "%s | Chairly",
   },
-  description: "Simple websites and appointment requests for beauty and grooming businesses.",
+  description:
+    "Simple websites and appointment requests for beauty and grooming businesses.",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default function RootLayout({
+  children,
+}: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
       <body>{children}</body>

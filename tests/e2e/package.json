@@ -3,10 +3,15 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:synthetic": "playwright test --config playwright.synthetic.config.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.2",
-    "@playwright/test": "^1.55.0"
+    "@playwright/test": "^1.55.0",
+    "postgres": "^3.4.7",
+    "typescript": "^5.9.2",
+    "@types/node": "^22.15.0"
   }
 }
