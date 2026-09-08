@@ -27,9 +27,17 @@ function errorResponse(
   code: ErrorCode,
   requestId: string,
   headers?: HeadersInit,
+  fieldErrors?: Readonly<Record<string, readonly string[]>>,
 ) {
   return Response.json(
-    { error: { code, message: failureMessage, requestId } },
+    {
+      error: {
+        code,
+        message: failureMessage,
+        requestId,
+        ...(fieldErrors ? { fieldErrors } : {}),
+      },
+    },
     headers ? { status, headers } : { status },
   );
 }
@@ -131,7 +139,26 @@ export async function POST(
 
   const parsed = publicAppointmentRequestSchema.safeParse(input);
   if (!parsed.success) {
-    return errorResponse(400, "VALIDATION_FAILED", requestId);
+    const messages: Readonly<Record<string, string>> = {
+      serviceId: "Choose a service to continue.",
+      customerName: "Enter your name (120 characters or fewer)",
+      contactDetail: "Enter your contact detail (254 characters or fewer)",
+      preferredTime: "Choose a valid preferred date and time",
+    };
+    const fieldErrors: Record<string, readonly string[]> = {};
+    for (const issue of parsed.error.issues) {
+      const field = issue.path[0];
+      if (typeof field === "string" && messages[field]) {
+        fieldErrors[field] = [messages[field]];
+      }
+    }
+    return errorResponse(
+      400,
+      "VALIDATION_FAILED",
+      requestId,
+      undefined,
+      fieldErrors,
+    );
   }
 
   try {

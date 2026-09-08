@@ -190,14 +190,14 @@ async function selectAvailableAssignment(
 
   for (const assignment of assignments) {
     const preferredTimes = await transaction.execute<{
-      startsAt: Date;
+      startsAtMs: number;
       roundTrip: string;
       meetsLeadTime: boolean;
       withinHorizon: boolean;
       alignsToSlot: boolean;
     }>(sql`
       select
-        (${command.preferredTime}::timestamp at time zone ${assignment.timeZone}) as "startsAt",
+        (extract(epoch from (${command.preferredTime}::timestamp at time zone ${assignment.timeZone})) * 1000)::double precision as "startsAtMs",
         to_char(
           (${command.preferredTime}::timestamp at time zone ${assignment.timeZone})
             at time zone ${assignment.timeZone},
@@ -227,11 +227,13 @@ async function selectAvailableAssignment(
     }
     hasValidPreferredTime = true;
 
+    // Raw Drizzle results do not decode timestamps to Date; use UTC epoch milliseconds.
+    const startsAt = new Date(preferred.startsAtMs);
     const endsAt = new Date(
-      preferred.startsAt.getTime() + assignment.durationMinutes * 60_000,
+      startsAt.getTime() + assignment.durationMinutes * 60_000,
     );
     const bufferedStartsAt = new Date(
-      preferred.startsAt.getTime() - assignment.bufferBeforeMinutes * 60_000,
+      startsAt.getTime() - assignment.bufferBeforeMinutes * 60_000,
     );
     const bufferedEndsAt = new Date(
       endsAt.getTime() + assignment.bufferAfterMinutes * 60_000,
@@ -265,8 +267,8 @@ async function selectAvailableAssignment(
               and location_id = ${assignment.locationId}
               and (staff_id is null or staff_id = ${assignment.staffId})
               and kind = 'available'
-              and starts_at <= ${bufferedStartsAt}
-              and ends_at >= ${bufferedEndsAt}
+              and starts_at <= ${bufferedStartsAt.toISOString()}
+              and ends_at >= ${bufferedEndsAt.toISOString()}
           )
         )
         and not exists (
@@ -276,8 +278,8 @@ async function selectAvailableAssignment(
             and location_id = ${assignment.locationId}
             and (staff_id is null or staff_id = ${assignment.staffId})
             and kind = 'closed'
-            and starts_at < ${bufferedEndsAt}
-            and ends_at > ${bufferedStartsAt}
+            and starts_at < ${bufferedEndsAt.toISOString()}
+            and ends_at > ${bufferedStartsAt.toISOString()}
         )
       ) as "isAvailable"
     `);
@@ -299,17 +301,17 @@ async function selectAvailableAssignment(
         and status in ('pending', 'confirmed')
         and starts_at
               - buffer_before_minutes_snapshot * interval '1 minute'
-            < ${bufferedEndsAt}
+            < ${bufferedEndsAt.toISOString()}
         and ends_at
               + buffer_after_minutes_snapshot * interval '1 minute'
-            > ${bufferedStartsAt}
+            > ${bufferedStartsAt.toISOString()}
       limit 1
     `);
     if (conflicts.length === 0) {
       return {
         ok: true,
         assignment,
-        startsAt: preferred.startsAt,
+        startsAt,
         endsAt,
       };
     }
@@ -465,6 +467,41 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
             );
           };
 
+          // The content lock also protects retries after fingerprint expiry.
+          // Compare with the domain normalizer while preserving stored details.
+          const candidates = await transaction.execute<{
+            id: string;
+            customerName: string;
+            contactDetail: string;
+          }>(sql`
+            select appointment.id,
+              appointment.customer_name_snapshot as "customerName",
+              appointment.customer_contact_snapshot as "contactDetail"
+            from appointments as appointment
+            join appointment_services as service
+              on service.tenant_id = appointment.tenant_id
+             and service.appointment_id = appointment.id
+            where appointment.tenant_id = ${tenantId}
+              and service.tenant_id = ${tenantId}
+              and service.service_id = ${command.serviceId}
+              and appointment.source = 'public_web'
+              and appointment.status in ('pending', 'confirmed')
+              and appointment.preferred_time_local_snapshot = ${command.preferredTime}
+            order by appointment.created_at, appointment.id
+          `);
+          const existing = candidates.find(
+            (candidate) =>
+              appointmentRequestIdentity({ ...command, ...candidate }) ===
+              appointmentRequestIdentity(command),
+          );
+          if (existing) {
+            return complete({
+              ok: true,
+              appointment: { id: existing.id, status: "pending" },
+              outcome: "duplicate",
+            });
+          }
+
           const assignments = await transaction.execute<AssignmentRow>(sql`
             select
               tenant.policy_version as "policyVersion",
@@ -603,8 +640,8 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               ${command.contactDetail},
               'pending',
               'public_web',
-              ${startsAt},
-              ${endsAt},
+              ${startsAt.toISOString()},
+              ${endsAt.toISOString()},
               ${assignment.timeZone},
               ${command.preferredTime},
               ${assignment.bufferBeforeMinutes},

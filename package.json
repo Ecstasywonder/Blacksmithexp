@@ -11,13 +11,15 @@
     "build": "pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
+    "test": "pnpm --filter '!@chairly/e2e' -r --if-present test",
     "test:e2e": "pnpm --filter @chairly/e2e test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @chairly/database db:generate",
     "db:migrate": "pnpm --filter @chairly/database db:migrate",
-    "db:migrate:test": "pnpm --filter @chairly/database db:migrate:test"
+    "db:migrate:test": "pnpm --filter @chairly/database db:migrate:test",
+    "verify": "node tools/verify.mjs",
+    "verify:local": "node tools/verify-local.mjs"
   },
   "devDependencies": {
     "prettier": "^3.6.2"

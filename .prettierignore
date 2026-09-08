@@ -1,0 +1,6 @@
+.next/
+**/.next/
+playwright-report/
+**/playwright-report/
+test-results/
+**/test-results/

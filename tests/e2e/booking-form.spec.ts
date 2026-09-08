@@ -96,7 +96,12 @@ test.describe("public booking form", () => {
     await firstRequestStarted;
     await expect(submitButton).toBeDisabled();
     await expect(submitButton).toHaveText("Submitting request…");
-    await submitButton.evaluate((button) => button.click());
+    await submitButton.evaluate((button) => {
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error("Expected the booking submit button");
+      }
+      button.click();
+    });
     await expect.poll(() => requestCount).toBe(1);
 
     releaseFirstResponse();

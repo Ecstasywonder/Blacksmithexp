@@ -80,10 +80,15 @@ function validateBookingRequest(
 
   if (!customerName) {
     errors.customerName = "Enter your name";
+  } else if (String(formData.get("customerName")).length > 120) {
+    errors.customerName = "Enter your name (120 characters or fewer)";
   }
 
   if (!contactDetail) {
     errors.contactDetail = "Enter your contact detail";
+  } else if (String(formData.get("contactDetail")).length > 254) {
+    errors.contactDetail =
+      "Enter your contact detail (254 characters or fewer)";
   }
 
   if (!preferredTime) {
@@ -157,6 +162,37 @@ export function BookingForm({
           body,
         },
       );
+
+      if (!response.ok) {
+        const payload: unknown = await response.json();
+        if (
+          payload &&
+          typeof payload === "object" &&
+          "error" in payload &&
+          payload.error &&
+          typeof payload.error === "object" &&
+          "fieldErrors" in payload.error
+        ) {
+          const fields = payload.error.fieldErrors;
+          const serverErrors: BookingFieldErrors = {};
+          if (fields && typeof fields === "object") {
+            for (const field of bookingFieldOrder) {
+              const messages = Reflect.get(fields, field);
+              if (Array.isArray(messages) && typeof messages[0] === "string") {
+                serverErrors[field] = messages[0];
+              }
+            }
+          }
+          setErrors(serverErrors);
+          const invalidField = bookingFieldOrder.find(
+            (field) => serverErrors[field],
+          );
+          if (invalidField)
+            form
+              .querySelector<HTMLElement>(`[name="${invalidField}"]`)
+              ?.focus();
+        }
+      }
 
       const payload: unknown = response.ok ? await response.json() : null;
       const outcome =

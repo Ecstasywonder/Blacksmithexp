@@ -390,6 +390,24 @@ test(
         reason: "idempotency_conflict",
       });
 
+      // Expire both transport and normalized-content receipts. Active rows
+      // still identify the original request, including normalized retries.
+      await administrator.begin(async (transaction) => {
+        await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+        await transaction`update idempotency_keys set expires_at = now() - interval '1 minute'
+          where tenant_id = ${tenantA.id}`;
+      });
+      const expiredNormalizedRetry = await requestAppointment(repository, {
+        tenantSlug: tenantA.slug,
+        serviceId: tenantA.serviceId,
+        ...identicalCustomer,
+        customerName: "ada   okafor",
+        contactDetail: "  ada@example.TEST ",
+        idempotencyKey: randomUUID(),
+        requestId: randomUUID(),
+      });
+      assert.deepEqual(expiredNormalizedRetry, replayA);
+
       const [pendingA, pendingB] = await Promise.all([
         getOwnerPendingAppointments(runtime.db, tenantA.ownerId, tenantA.id),
         getOwnerPendingAppointments(runtime.db, tenantB.ownerId, tenantB.id),
@@ -498,8 +516,8 @@ test(
             ${tenantA.locationId},
             ${tenantA.staffId},
             'available',
-            (${`${appointmentDate}T18:30`}::timestamp at time zone 'Africa/Lagos'),
-            (${`${appointmentDate}T20:30`}::timestamp at time zone 'Africa/Lagos')
+            (${`${appointmentDate}T18:30`}::text::timestamp at time zone 'Africa/Lagos'),
+            (${`${appointmentDate}T20:30`}::text::timestamp at time zone 'Africa/Lagos')
           )
         `;
       });
@@ -590,8 +608,8 @@ test(
             ${tenantA.locationId},
             ${tenantA.staffId},
             'closed',
-            (${`${appointmentDate}T12:00`}::timestamp at time zone 'Africa/Lagos'),
-            (${`${appointmentDate}T13:30`}::timestamp at time zone 'Africa/Lagos')
+            (${`${appointmentDate}T12:00`}::text::timestamp at time zone 'Africa/Lagos'),
+            (${`${appointmentDate}T13:30`}::text::timestamp at time zone 'Africa/Lagos')
           )
         `;
       });
@@ -644,6 +662,28 @@ test(
         ).length,
         1,
       );
+
+      // The database constraint must also protect writes that bypass the repository.
+      // These appointments do not overlap without buffers; both guarded statuses
+      // must reject the buffer overlap even with a non-UTC database session.
+      assert.ok(availableException.ok);
+      for (const status of ["pending", "confirmed"] as const) {
+        await assert.rejects(
+          administrator.begin(async (transaction) => {
+            await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+            await transaction`set local time zone 'America/New_York'`;
+            await transaction`
+              update appointments set
+                status = ${status},
+                starts_at = ${`${appointmentDate}T10:35:00Z`}::timestamptz,
+                ends_at = ${`${appointmentDate}T11:35:00Z`}::timestamptz
+              where tenant_id = ${tenantA.id}
+                and id = ${availableException.appointment.id}
+            `;
+          }),
+          { code: "23P01" },
+        );
+      }
 
       const aggregateCounts = await administrator.begin(async (transaction) => {
         await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;

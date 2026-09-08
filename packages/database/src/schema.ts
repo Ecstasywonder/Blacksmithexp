@@ -453,6 +453,11 @@ export const appointments = pgTable(
   },
   (table) => [
     uniqueIndex("appointments_public_reference_uq").on(table.publicReference),
+    index("appointments_public_retry_lookup_idx")
+      .on(table.tenantId, table.preferredTimeLocalSnapshot)
+      .where(
+        sql`${table.source} = 'public_web' and ${table.status} in ('pending', 'confirmed')`,
+      ),
     index("appointments_tenant_status_start_idx").on(
       table.tenantId,
       table.status,

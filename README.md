@@ -37,3 +37,17 @@ Set `RATE_LIMIT_SECRET` to a separate random value of at least 32 characters. On
 For self-hosting, keep the application origin private and configure the trusted gateway to strip inbound client-identity headers, set exactly one client IP in the header named by `TRUSTED_PROXY_CLIENT_IP_HEADER`, and set `x-chairly-client-ip-signature` to the lowercase hex HMAC-SHA256 of `client-ip:v1\0<header-name>\0<client-ip>` using the separate 32-or-more-character `TRUSTED_PROXY_CLIENT_IP_SECRET`. The application compares that signature in constant time and fails closed when the header, secret, IP, or signature is invalid. It never trusts `x-forwarded-for` by default.
 
 The route streams and enforces its 8 KiB JSON limit without buffering an unbounded request body. A self-hosted reverse proxy should enforce the same or a stricter payload limit before traffic reaches Next.js.
+
+## Sprint verification
+
+Run `pnpm verify:local` after installing Chromium with
+`pnpm --filter @chairly/e2e exec playwright install --with-deps chromium`.
+This provisions an isolated, disposable PostgreSQL 16 database and runs the
+required checks, including the real booking path and tenant isolation.
+See [booking regression guarantees](tests/e2e/README.md) for setup, the five
+acceptance criteria, pinned validation rules, and CI behaviour.
+
+Invalid booking fields additionally return `error.fieldErrors`: a mapping
+from field names to safe human-readable message arrays. Customer input is not
+echoed in error responses. Existing response codes and generic messages remain
+compatible.

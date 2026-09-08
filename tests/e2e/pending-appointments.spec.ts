@@ -343,10 +343,10 @@ test.describe("pending appointment inbox", () => {
       const matchingB = dashboardB
         .getByRole("listitem")
         .filter({ hasText: customerName });
-      await Promise.all([
-        expect(matchingA).toHaveCount(1, { timeout: 5_000 }),
-        expect(matchingB).toHaveCount(1, { timeout: 5_000 }),
-      ]);
+      await dashboardA.bringToFront();
+      await expect(matchingA).toHaveCount(1, { timeout: 5_000 });
+      await dashboardB.bringToFront();
+      await expect(matchingB).toHaveCount(1, { timeout: 5_000 });
       await expect(dashboardA.getByText("Luma Studio")).toBeVisible();
       await expect(dashboardB.getByText("Ember Studio")).toBeVisible();
     } finally {
