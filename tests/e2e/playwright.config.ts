@@ -35,7 +35,17 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(process.env.CHAIRLY_E2E_CHANNEL === "msedge"
+          ? { channel: "msedge" }
+          : {}),
+      },
+    },
+  ],
   webServer: {
     command: `pnpm build && pnpm start --hostname 127.0.0.1 --port ${port}`,
     cwd: resolve(__dirname, "../../apps/web"),

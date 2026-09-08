@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "test": "playwright test",
+    "test": "playwright test && pnpm test:synthetic",
     "test:synthetic": "playwright test --config playwright.synthetic.config.ts",
     "typecheck": "tsc --noEmit"
   },

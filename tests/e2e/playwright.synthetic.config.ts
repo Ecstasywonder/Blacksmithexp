@@ -4,14 +4,18 @@ import { resolve } from "node:path";
 const port = 3210;
 const webAppDirectory = resolve(__dirname, "../../apps/web");
 const localBrowser =
-  process.platform === "win32" ? { channel: "msedge" as const } : {};
+  process.platform === "win32" || process.env.CHAIRLY_E2E_CHANNEL === "msedge"
+    ? { channel: "msedge" as const }
+    : {};
 
 export default defineConfig({
   testDir: ".",
   testMatch: ["booking-form.spec.ts", "pending-appointments.spec.ts"],
-  fullyParallel: true,
+  fullyParallel: false,
+  workers: 1,
+  forbidOnly: true,
   timeout: 90_000,
-  retries: process.env.CI ? 2 : 0,
+  retries: 0,
   reporter: "list",
   use: {
     baseURL: `http://127.0.0.1:${port}`,
@@ -30,8 +34,8 @@ export default defineConfig({
       CHAIRLY_E2E_CATALOG: "synthetic",
       CHAIRLY_E2E_PRODUCTION_BUILD: "true",
     },
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    reuseExistingServer: false,
+    timeout: 300_000,
     url: `http://127.0.0.1:${port}/api/health`,
   },
 });

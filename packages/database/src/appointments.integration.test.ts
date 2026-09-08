@@ -305,10 +305,7 @@ test(
         idempotencyKey: tenantAIdempotencyKey,
         requestId: randomUUID(),
       });
-      assert.deepEqual(expiredRetry, {
-        ok: false,
-        reason: "slot_unavailable",
-      });
+      assert.deepEqual(expiredRetry, resultA);
       const expiredRows = await administrator.begin(async (transaction) => {
         await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
         return transaction<{ count: number }[]>`

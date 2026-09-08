@@ -1,9 +1,10 @@
 # Booking regression guarantees (BEW-005)
 
-The standard `pnpm test:e2e` runs `booking-guarantees.spec.ts` against the
-production Next.js booking route and real PostgreSQL repositories. It refuses
-missing database/session configuration or synthetic adapter flags. It never
-reuses an existing web server. Only synthetic customer data is used.
+The standard `pnpm test:e2e` first runs `booking-guarantees.spec.ts` against
+the production Next.js booking route and real PostgreSQL repositories, then
+runs the existing synthetic form/inbox specs. The real-database suite refuses
+missing configuration or synthetic adapter flags. Neither suite reuses an
+existing web server. Only synthetic customer data is used.
 
 ## Standard sprint verification
 
@@ -20,6 +21,8 @@ port 55435, applies migrations, grants a separate runtime role, generates test
 session secrets, and runs `pnpm verify`. It cleans up its own container in a
 finally block; no existing application databases are reset. Override
 `CHAIRLY_TEST_DB_PORT` or `CHAIRLY_E2E_PORT` if ports 55435 or 3215 are occupied.
+To use an already installed Edge browser locally, set `CHAIRLY_E2E_CHANNEL=msedge`.
+CI uses the locked Chromium download by default.
 After a forced process kill, remove only the `chairly-bew005-<pid>` Compose
 project belonging to that run.
 
@@ -51,7 +54,7 @@ synthetic fixtures and are retained for seven days.
 | 01        | Submit the actual public form; inspect exactly one database appointment and service snapshot, exact customer name/contact/preferred date-time, pending status, tenant identity, matching response ID and authenticated owner API result. Check event/audit/outbox counts atomically accompany the booking.             |
 | 02        | Omit each required field independently in both UI and API; assert field-specific readable errors and zero database appointments. Reject malformed dates before correction. Guard whitespace-only fields, UUID shape, length limits, and the existing date-time format. Exercise actual server errors through the form. |
 | 03        | Submit on two active tenant pages in the same run; prove each owner sees only its own ID. Reject a mismatched membership and foreign service. Verify RLS prevents cross-tenant reads and updates using the non-owner runtime role.                                                                                     |
-| 04        | Dispatch two rapid browser submissions before React renders its disabled state; assert the same generated key, two successful responses with one ID, then retry sequentially and assert exactly one appointment/event/audit/outbox.                                                                                    |
+| 04        | Guard rapid same-key submissions, independent sessions, reloads and fresh-key retries with one or two available staff. Assert one appointment/event/audit/outbox and successful acknowledgements with the same ID.                                                                                                     |
 | 05        | Mandatory PostgreSQL-backed Playwright configuration and the standard verification/CI command fail on missing prerequisites or any broken guarantee.                                                                                                                                                                   |
 
 Fixtures have unique IDs/slugs per test, seed both businesses, and delete only
@@ -59,8 +62,8 @@ their own records. The runtime role is checked for no superuser/BYPASSRLS/table
 ownership, and appointment RLS must be enabled and forced. Owner cookies are
 signed by test helpers using the configured test secret and exercise normal
 server membership checks; no production authentication bypass is introduced.
-Browser accessibility and mobile overflow checks are confined to the booking
-form. No new availability behaviour is implemented or required by BEW-005.
+The real-database suite checks booking form accessibility and mobile overflow;
+the existing supplemental suite retains its inbox accessibility check. No new availability behaviour is implemented or required by BEW-005.
 
 ## Validation contract pinned while design rules are TBD
 
@@ -84,5 +87,26 @@ error code, request ID, and success contract remain compatible. The browser
 shows returned field errors and focuses the first invalid field.
 
 The earlier synthetic adapter browser scenarios remain available via
-`pnpm --filter @chairly/e2e test:synthetic`. They are supplemental and cannot
-substitute for the database-backed standard verification pass.
+`pnpm --filter @chairly/e2e test:synthetic`. They also run automatically after the database-backed suite and cannot
+substitute for it.
+
+## PR review regression coverage
+
+`pnpm test:e2e` now runs the real-database guarantees followed by both existing
+synthetic form/inbox specs, each against a freshly built server with no reuse or
+retries. A failure in either suite fails the standard pass and CI. Synthetic
+adapters are enabled only in that suite's child server environment; the final
+production build uses the real adapters.
+
+Production requests reuse one server-process database pool. A production-mode
+unit test checks 100 pool acquisitions; a real-server test checks repeated
+requests stay within the configured connection limit.
+
+An identical request means the same resolved tenant, service, preferred local
+time, and exact customer name/contact strings. New keys from reloads, independent
+sessions, or other devices acknowledge the same pending/confirmed appointment,
+including after the 24-hour key record expires. The acknowledgement retains the
+original pending-request response contract; current status comes from owner
+reads. Cancelled/declined appointments do not prevent a new request, and changed
+customer details are a different request. Concurrent independent-session tests
+cover both one and two available staff, so spare capacity cannot hide duplicates.

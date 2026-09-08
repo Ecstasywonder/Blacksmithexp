@@ -18,9 +18,8 @@ export function getDatabase() {
 
   const database = createDatabase(databaseUrl);
 
-  if (process.env.NODE_ENV !== "production") {
-    globalDatabase.chairlyDatabase = database;
-  }
+  // One pool per server process, including production and dev hot reloads.
+  globalDatabase.chairlyDatabase = database;
 
   return database;
 }

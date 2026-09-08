@@ -30,3 +30,17 @@ do not rewrite its migration ledger or run this repair over it: reconcile that
 deployment through a separately reviewed forward migration. The runner retains
 its checksum mismatch protection. Verify on a fresh PostgreSQL 16 database and
 run the migration command twice to check replay before rollout.
+
+## `0004` rollout notes
+
+`0004_public_booking_retry_lookup.sql` adds a non-unique partial index for
+pending/confirmed public requests by tenant and preferred local time. It does
+not modify existing rows, applied migrations, RLS, or the staff overlap constraint.
+The transactional index build briefly blocks appointment writes: deploy during
+a low-traffic window. No new environment variables or grants are required.
+
+The server serializes identical request contents with a transaction-scoped
+advisory lock, then checks existing appointment/service snapshots before assigning
+staff. This also recognizes appointments created before the deployment. Deploy
+all booking writers together: older processes do not acquire the new identity
+lock. Existing duplicate rows are not automatically merged or deleted.

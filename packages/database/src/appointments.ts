@@ -77,11 +77,14 @@ const replayableFailureReasons = new Set([
 ]);
 const idempotencyCleanupBatchSize = 100;
 
-function requestHash(command: RequestAppointmentCommand): string {
+function requestHash(
+  command: RequestAppointmentCommand,
+  tenantIdentity = command.tenantSlug.trim().toLowerCase(),
+): string {
   return createHash("sha256")
     .update(
       JSON.stringify([
-        command.tenantSlug.trim().toLowerCase(),
+        tenantIdentity,
         command.serviceId,
         command.customerName,
         command.contactDetail,
@@ -414,6 +417,40 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               command.idempotencyKey,
               result,
             );
+
+          // A new page/device has a new key, but may be retrying the same request.
+          // Serialize by trusted tenant + request contents before assigning staff.
+          // Keep the existing per-key hash contract unchanged for old retries.
+          const identity = requestHash(
+            { ...command, serviceId: command.serviceId.toLowerCase() },
+            tenantId,
+          );
+          await transaction.execute(sql`
+            select pg_advisory_xact_lock(hashtextextended(${`booking-request:${identity}`}, 0))
+          `);
+          const existing = await transaction.execute<{ id: string }>(sql`
+            select appointment.id
+            from appointments as appointment
+            join appointment_services as service
+              on service.tenant_id = appointment.tenant_id
+             and service.appointment_id = appointment.id
+            where appointment.tenant_id = ${tenantId}
+              and service.tenant_id = ${tenantId}
+              and service.service_id = ${command.serviceId}
+              and appointment.source = 'public_web'
+              and appointment.status in ('pending', 'confirmed')
+              and appointment.preferred_time_local_snapshot = ${command.preferredTime}
+              and appointment.customer_name_snapshot = ${command.customerName}
+              and appointment.customer_contact_snapshot = ${command.contactDetail}
+            order by appointment.created_at, appointment.id
+            limit 1
+          `);
+          if (existing[0]) {
+            return complete({
+              ok: true,
+              appointment: { id: existing[0].id, status: "pending" },
+            });
+          }
 
           const assignments = await transaction.execute<AssignmentRow>(sql`
             select

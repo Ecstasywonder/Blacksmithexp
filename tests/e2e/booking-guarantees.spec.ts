@@ -387,3 +387,93 @@ test("04: browser rapid double-submit and sequential retry use one key and creat
   expect(requests[2]!.headers()["idempotency-key"]).toBe(key);
   expect(await assertOne(booking, tenant, input)).toBe(first.appointment.id);
 });
+
+for (const staffCount of [1, 2]) {
+  test(`04: independent sessions and reloads create one request with ${staffCount} available staff`, async ({
+    page,
+    browser,
+    request,
+    booking,
+  }) => {
+    const [tenant, other] = booking.tenants;
+    if (staffCount === 2) {
+      const secondStaff = randomUUID();
+      await booking.administrator.begin(async (tx) => {
+        await tx`select set_config('app.tenant_id', ${tenant.id}, true)`;
+        await tx`insert into staff_members (id, tenant_id, display_name, is_active)
+          values (${secondStaff}, ${tenant.id}, 'Second professional', true)`;
+        await tx`insert into staff_services (tenant_id, staff_id, service_id)
+          values (${tenant.id}, ${secondStaff}, ${tenant.serviceId})`;
+        await tx`insert into weekly_availability
+          (tenant_id, location_id, staff_id, day_of_week, starts_local_at, ends_local_at)
+          select tenant_id, location_id, ${secondStaff}, day_of_week, starts_local_at, ends_local_at
+          from weekly_availability where tenant_id = ${tenant.id} and staff_id = ${tenant.staffId}`;
+      });
+    }
+    const separate = await browser.newContext({
+      baseURL: `http://127.0.0.1:${process.env.CHAIRLY_E2E_PORT ?? 3215}`,
+    });
+    try {
+      const secondPage = await separate.newPage();
+      const input = inputFor(tenant);
+      await Promise.all([
+        fill(page, tenant, input),
+        fill(secondPage, tenant, input),
+      ]);
+      const responses = await Promise.all([
+        submit(page, tenant),
+        submit(secondPage, tenant),
+      ]);
+      expect(responses[0]!.request().headers()["idempotency-key"]).not.toBe(
+        responses[1]!.request().headers()["idempotency-key"],
+      );
+      expect(await responses[0]!.json()).toEqual(await responses[1]!.json());
+      const id = await assertOne(booking, tenant, input);
+      await page.reload();
+      await fill(page, tenant, input);
+      const reloaded = await submit(page, tenant);
+      expect((await reloaded.json()).appointment.id).toBe(id);
+      const deviceRetry = await post(request, tenant, input);
+      expect(deviceRetry.status()).toBe(201);
+      expect((await deviceRetry.json()).appointment.id).toBe(id);
+      await assertOne(booking, tenant, input);
+      expect(
+        (await rows(booking)).filter((row) => row.tenant_id === other.id),
+      ).toHaveLength(0);
+      if (staffCount === 2) {
+        const differentCustomer = await post(request, tenant, {
+          ...input,
+          customerName: "Another customer",
+          contactDetail: "another@example.test",
+        });
+        expect(differentCustomer.status()).toBe(201);
+        expect((await differentCustomer.json()).appointment.id).not.toBe(id);
+        expect(
+          (await rows(booking)).filter((row) => row.tenant_id === tenant.id),
+        ).toHaveLength(2);
+      }
+    } finally {
+      await separate.close();
+    }
+  });
+}
+
+test("production requests keep database connections within one pool limit", async ({
+  request,
+  booking,
+}) => {
+  for (const tenant of booking.tenants) {
+    const input = inputFor(tenant);
+    for (let index = 0; index < 12; index++) {
+      const response = await post(request, tenant, input);
+      expect(response.status()).toBe(201);
+    }
+    await assertOne(booking, tenant, input);
+  }
+  const runtimeRole = await booking.runtime`select current_user as name`;
+  const connections = await booking.administrator`
+    select count(*)::int as count from pg_stat_activity
+    where usename = ${runtimeRole[0]!.name} and datname = current_database()`;
+  // The server pool has max=10; this fixture's separate runtime pool has max=2.
+  expect(connections[0]!.count).toBeLessThanOrEqual(12);
+});
