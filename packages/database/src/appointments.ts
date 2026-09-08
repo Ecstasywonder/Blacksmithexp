@@ -2,10 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type {
   AppointmentRequestRepository,
-  RequestAppointmentFailure,
   RequestAppointmentCommand,
   RequestAppointmentResult,
 } from "@chairly/domain";
+import { appointmentRequestIdentity } from "@chairly/domain";
 import type { Database } from "./index";
 import {
   withTenantTransaction,
@@ -69,29 +69,20 @@ type IdempotencyRow = {
   responseBody: unknown;
 };
 
-const replayableFailureReasons = new Set([
-  "service_unavailable",
-  "assignment_unavailable",
-  "invalid_preferred_time",
-  "slot_unavailable",
-]);
 const idempotencyCleanupBatchSize = 100;
 
-function requestHash(
-  command: RequestAppointmentCommand,
-  tenantIdentity = command.tenantSlug.trim().toLowerCase(),
-): string {
+function requestHash(command: RequestAppointmentCommand): string {
   return createHash("sha256")
-    .update(
-      JSON.stringify([
-        tenantIdentity,
-        command.serviceId,
-        command.customerName,
-        command.contactDetail,
-        command.preferredTime,
-      ]),
-    )
+    .update(appointmentRequestIdentity(command))
     .digest("hex");
+}
+
+function transportIdempotencyKey(key: string): string {
+  return `public-request:${key}`;
+}
+
+function fingerprintIdempotencyKey(hash: string): string {
+  return `public-fingerprint:v1:${hash}`;
 }
 
 function replayResult(value: unknown): RequestAppointmentResult | null {
@@ -112,23 +103,9 @@ function replayResult(value: unknown): RequestAppointmentResult | null {
       return {
         ok: true,
         appointment: { id: appointment.id, status: "pending" },
+        outcome: "duplicate",
       };
     }
-  }
-
-  if (
-    value.ok === false &&
-    "reason" in value &&
-    typeof value.reason === "string" &&
-    replayableFailureReasons.has(value.reason)
-  ) {
-    return {
-      ok: false,
-      reason: value.reason as Exclude<
-        RequestAppointmentFailure,
-        "tenant_not_found" | "idempotency_conflict"
-      >,
-    };
   }
 
   return null;
@@ -141,7 +118,9 @@ async function storeIdempotentResult(
   result: RequestAppointmentResult,
 ): Promise<RequestAppointmentResult> {
   const responseStatus = result.ok
-    ? 201
+    ? result.outcome === "created"
+      ? 201
+      : 200
     : result.reason === "slot_unavailable"
       ? 409
       : 422;
@@ -160,8 +139,6 @@ async function deleteExpiredIdempotencyKeys(
   transaction: TenantTransaction,
   tenantId: string,
 ): Promise<void> {
-  // Keep request-path cleanup bounded. SKIP LOCKED prevents maintenance for
-  // one request from waiting on a key currently owned by another request.
   await transaction.execute(sql`
     delete from idempotency_keys as expired
     using (
@@ -368,6 +345,8 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
         tenantId,
         async (transaction) => {
           const commandHash = requestHash(command);
+          const requestKey = transportIdempotencyKey(command.idempotencyKey);
+          const fingerprintKey = fingerprintIdempotencyKey(commandHash);
           await deleteExpiredIdempotencyKeys(transaction, tenantId);
           await transaction.execute(sql`
             insert into idempotency_keys (
@@ -377,7 +356,7 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               expires_at
             ) values (
               ${tenantId},
-              ${command.idempotencyKey},
+              ${requestKey},
               ${commandHash},
               now() + interval '24 hours'
             )
@@ -395,7 +374,7 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               response_body as "responseBody"
             from idempotency_keys
             where tenant_id = ${tenantId}
-              and key = ${command.idempotencyKey}
+              and key = ${requestKey}
             for update
           `);
           const idempotency = idempotencyRows[0];
@@ -410,26 +389,94 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
             return replay;
           }
 
-          const complete = (result: RequestAppointmentResult) =>
-            storeIdempotentResult(
+          // Serialize the normalized content identity independently from the
+          // browser-generated key. This closes the race between two different
+          // requests carrying the same form values without joining tenants.
+          await transaction.execute(
+            sql`select pg_advisory_xact_lock(hashtextextended(${`${tenantId}:${commandHash}`}, 0))`,
+          );
+          const fingerprintRows = await transaction.execute<IdempotencyRow>(sql`
+              select
+                request_hash as "requestHash",
+                response_body as "responseBody"
+              from idempotency_keys
+              where tenant_id = ${tenantId}
+                and key = ${fingerprintKey}
+                and expires_at > now()
+              for update
+            `);
+          const fingerprint = fingerprintRows[0];
+          if (fingerprint) {
+            if (fingerprint.requestHash !== commandHash) {
+              throw new Error("Booking fingerprint hash mismatch");
+            }
+            const duplicate = replayResult(fingerprint.responseBody);
+            if (!duplicate?.ok) {
+              throw new Error("Booking fingerprint result is incomplete");
+            }
+            return storeIdempotentResult(
               transaction,
               tenantId,
-              command.idempotencyKey,
+              requestKey,
+              duplicate,
+            );
+          }
+
+          await transaction.execute(sql`
+            insert into idempotency_keys (
+              tenant_id,
+              key,
+              request_hash,
+              expires_at
+            ) values (
+              ${tenantId},
+              ${fingerprintKey},
+              ${commandHash},
+              now() + interval '24 hours'
+            )
+            on conflict (tenant_id, key) do update set
+              request_hash = excluded.request_hash,
+              response_status = null,
+              response_body = null,
+              created_at = now(),
+              expires_at = excluded.expires_at
+            where idempotency_keys.expires_at <= now()
+          `);
+
+          const complete = async (result: RequestAppointmentResult) => {
+            if (!result.ok) {
+              await transaction.execute(sql`
+                delete from idempotency_keys
+                where tenant_id = ${tenantId}
+                  and key in (${fingerprintKey}, ${requestKey})
+              `);
+              return result;
+            }
+
+            await storeIdempotentResult(
+              transaction,
+              tenantId,
+              fingerprintKey,
               result,
             );
+            return storeIdempotentResult(
+              transaction,
+              tenantId,
+              requestKey,
+              result,
+            );
+          };
 
-          // A new page/device has a new key, but may be retrying the same request.
-          // Serialize by trusted tenant + request contents before assigning staff.
-          // Keep the existing per-key hash contract unchanged for old retries.
-          const identity = requestHash(
-            { ...command, serviceId: command.serviceId.toLowerCase() },
-            tenantId,
-          );
-          await transaction.execute(sql`
-            select pg_advisory_xact_lock(hashtextextended(${`booking-request:${identity}`}, 0))
-          `);
-          const existing = await transaction.execute<{ id: string }>(sql`
-            select appointment.id
+          // The content lock also protects retries after fingerprint expiry.
+          // Compare with the domain normalizer while preserving stored details.
+          const candidates = await transaction.execute<{
+            id: string;
+            customerName: string;
+            contactDetail: string;
+          }>(sql`
+            select appointment.id,
+              appointment.customer_name_snapshot as "customerName",
+              appointment.customer_contact_snapshot as "contactDetail"
             from appointments as appointment
             join appointment_services as service
               on service.tenant_id = appointment.tenant_id
@@ -440,15 +487,18 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               and appointment.source = 'public_web'
               and appointment.status in ('pending', 'confirmed')
               and appointment.preferred_time_local_snapshot = ${command.preferredTime}
-              and appointment.customer_name_snapshot = ${command.customerName}
-              and appointment.customer_contact_snapshot = ${command.contactDetail}
             order by appointment.created_at, appointment.id
-            limit 1
           `);
-          if (existing[0]) {
+          const existing = candidates.find(
+            (candidate) =>
+              appointmentRequestIdentity({ ...command, ...candidate }) ===
+              appointmentRequestIdentity(command),
+          );
+          if (existing) {
             return complete({
               ok: true,
-              appointment: { id: existing[0].id, status: "pending" },
+              appointment: { id: existing.id, status: "pending" },
+              outcome: "duplicate",
             });
           }
 
@@ -685,7 +735,7 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
             )
           `);
 
-          return complete({ ok: true, appointment });
+          return complete({ ok: true, appointment, outcome: "created" });
         },
       );
     } catch (error) {

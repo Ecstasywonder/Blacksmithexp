@@ -6,6 +6,7 @@ import type {
   RequestAppointmentCommand,
   RequestAppointmentResult,
 } from "@chairly/domain";
+import { appointmentRequestIdentity } from "@chairly/domain";
 import type { OwnerPendingAppointments } from "@chairly/database";
 import { getSyntheticBookingCatalog } from "./public-booking-catalog";
 
@@ -19,6 +20,10 @@ const syntheticState = globalThis as typeof globalThis & {
     string,
     { command: string; result: RequestAppointmentResult }
   >;
+  chairlySyntheticAppointmentFingerprints?: Map<
+    string,
+    RequestAppointmentResult
+  >;
 };
 
 function appointments(): SyntheticAppointment[] {
@@ -31,6 +36,15 @@ function appointmentRequests() {
   return syntheticState.chairlySyntheticAppointmentRequests;
 }
 
+function appointmentFingerprints() {
+  syntheticState.chairlySyntheticAppointmentFingerprints ??= new Map();
+  return syntheticState.chairlySyntheticAppointmentFingerprints;
+}
+
+function replay(result: RequestAppointmentResult): RequestAppointmentResult {
+  return result.ok ? { ...result, outcome: "duplicate" } : result;
+}
+
 export class SyntheticAppointmentRequestRepository implements AppointmentRequestRepository {
   async createPendingAppointment(
     command: RequestAppointmentCommand,
@@ -41,16 +55,11 @@ export class SyntheticAppointmentRequestRepository implements AppointmentRequest
     }
 
     const requestKey = `${catalog.tenantId}:${command.idempotencyKey}`;
-    const commandIdentity = JSON.stringify([
-      command.serviceId,
-      command.customerName,
-      command.contactDetail,
-      command.preferredTime,
-    ]);
+    const commandIdentity = appointmentRequestIdentity(command);
     const existingRequest = appointmentRequests().get(requestKey);
     if (existingRequest) {
       return existingRequest.command === commandIdentity
-        ? existingRequest.result
+        ? replay(existingRequest.result)
         : { ok: false, reason: "idempotency_conflict" };
     }
 
@@ -59,6 +68,17 @@ export class SyntheticAppointmentRequestRepository implements AppointmentRequest
     );
     if (!service) {
       return { ok: false, reason: "service_unavailable" };
+    }
+
+    const fingerprintKey = `${catalog.tenantId}:${commandIdentity}`;
+    const existingFingerprint = appointmentFingerprints().get(fingerprintKey);
+    if (existingFingerprint) {
+      const duplicate = replay(existingFingerprint);
+      appointmentRequests().set(requestKey, {
+        command: commandIdentity,
+        result: duplicate,
+      });
+      return duplicate;
     }
 
     const appointment: SyntheticAppointment = {
@@ -77,8 +97,10 @@ export class SyntheticAppointmentRequestRepository implements AppointmentRequest
     const result: RequestAppointmentResult = {
       ok: true,
       appointment: { id: appointment.id, status: appointment.status },
+      outcome: "created",
     };
     appointmentRequests().set(requestKey, { command: commandIdentity, result });
+    appointmentFingerprints().set(fingerprintKey, result);
     return result;
   }
 }

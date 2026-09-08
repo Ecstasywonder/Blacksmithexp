@@ -103,10 +103,14 @@ unit test checks 100 pool acquisitions; a real-server test checks repeated
 requests stay within the configured connection limit.
 
 An identical request means the same resolved tenant, service, preferred local
-time, and exact customer name/contact strings. New keys from reloads, independent
+time, and customer name/contact normalized with Unicode NFKC, trimmed and
+collapsed whitespace, and lowercase matching. Stored customer details remain unchanged. New keys from reloads, independent
 sessions, or other devices acknowledge the same pending/confirmed appointment,
-including after the 24-hour key record expires. The acknowledgement retains the
-original pending-request response contract; current status comes from owner
+including after the 24-hour key record expires. The acknowledgement returns HTTP 200 with `outcome: "duplicate"` and the
+original pending-request receipt; current status comes from owner
 reads. Cancelled/declined appointments do not prevent a new request, and changed
-customer details are a different request. Concurrent independent-session tests
+customer details that normalize differently are a different request. Concurrent independent-session tests
 cover both one and two available staff, so spare capacity cannot hide duplicates.
+
+The real suite signs its local gateway identity headers using disposable verification
+credentials. The production signature validation remains enabled.

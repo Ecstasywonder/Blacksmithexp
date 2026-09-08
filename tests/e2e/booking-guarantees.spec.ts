@@ -1,3 +1,4 @@
+import { proxyHeaders } from "./support/trusted-proxy";
 import { randomUUID } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
 import type { Page, APIRequestContext } from "@playwright/test";
@@ -22,16 +23,25 @@ async function fill(page: Page, tenant: Tenant, input: BookingInput) {
     .getByLabel("Preferred time", { exact: true })
     .fill(input.preferredTime);
 }
-async function submit(page: Page, tenant: Tenant) {
+async function submit(
+  page: Page,
+  tenant: Tenant,
+  expected: "created" | "duplicate" | "either" = "created",
+) {
   const accepted = page.waitForResponse(
     `**/api/public/${tenant.slug}/appointments`,
   );
   await page.getByRole("button", { name: "Request appointment" }).click();
   const response = await accepted;
-  expect(response.status()).toBe(201);
+  const payload = await response.json();
+  if (expected !== "either") expect(payload.outcome).toBe(expected);
+  expect(["created", "duplicate"]).toContain(payload.outcome);
+  expect(response.status()).toBe(payload.outcome === "created" ? 201 : 200);
   await expect(
     page.getByRole("status", { name: "Submission status" }),
-  ).toContainText("request was sent");
+  ).toContainText(
+    payload.outcome === "created" ? "request was sent" : "already received",
+  );
   return response;
 }
 async function rows(booking: Fixture) {
@@ -277,8 +287,14 @@ test("03: both public pages route to their own tenant and reciprocal owner reads
 }) => {
   const [a, b] = booking.tenants;
   const origin = `http://127.0.0.1:${process.env.CHAIRLY_E2E_PORT ?? 3215}`;
-  const contextA = await browser.newContext({ baseURL: origin });
-  const contextB = await browser.newContext({ baseURL: origin });
+  const contextA = await browser.newContext({
+    baseURL: origin,
+    extraHTTPHeaders: proxyHeaders,
+  });
+  const contextB = await browser.newContext({
+    baseURL: origin,
+    extraHTTPHeaders: proxyHeaders,
+  });
   const pageA = await contextA.newPage();
   const pageB = await contextB.newPage();
   try {
@@ -377,13 +393,15 @@ test("04: browser rapid double-submit and sequential retry use one key and creat
   const key = requests[0]!.headers()["idempotency-key"];
   expect(key).toBeTruthy();
   expect(requests[1]!.headers()["idempotency-key"]).toBe(key);
-  expect(responses.map((response) => response.status())).toEqual([201, 201]);
+  expect(responses.map((response) => response.status()).sort()).toEqual([
+    200, 201,
+  ]);
   const first = await responses[0]!.json();
-  expect(await responses[1]!.json()).toEqual(first);
+  expect((await responses[1]!.json()).appointment).toEqual(first.appointment);
   await expect(
     page.getByRole("button", { name: "Request appointment" }),
   ).toBeEnabled();
-  await submit(page, tenant);
+  await submit(page, tenant, "duplicate");
   expect(requests[2]!.headers()["idempotency-key"]).toBe(key);
   expect(await assertOne(booking, tenant, input)).toBe(first.appointment.id);
 });
@@ -411,6 +429,7 @@ for (const staffCount of [1, 2]) {
       });
     }
     const separate = await browser.newContext({
+      extraHTTPHeaders: proxyHeaders,
       baseURL: `http://127.0.0.1:${process.env.CHAIRLY_E2E_PORT ?? 3215}`,
     });
     try {
@@ -421,20 +440,25 @@ for (const staffCount of [1, 2]) {
         fill(secondPage, tenant, input),
       ]);
       const responses = await Promise.all([
-        submit(page, tenant),
-        submit(secondPage, tenant),
+        submit(page, tenant, "either"),
+        submit(secondPage, tenant, "either"),
       ]);
       expect(responses[0]!.request().headers()["idempotency-key"]).not.toBe(
         responses[1]!.request().headers()["idempotency-key"],
       );
-      expect(await responses[0]!.json()).toEqual(await responses[1]!.json());
+      expect(responses.map((response) => response.status()).sort()).toEqual([
+        200, 201,
+      ]);
+      expect((await responses[0]!.json()).appointment).toEqual(
+        (await responses[1]!.json()).appointment,
+      );
       const id = await assertOne(booking, tenant, input);
       await page.reload();
       await fill(page, tenant, input);
-      const reloaded = await submit(page, tenant);
+      const reloaded = await submit(page, tenant, "duplicate");
       expect((await reloaded.json()).appointment.id).toBe(id);
       const deviceRetry = await post(request, tenant, input);
-      expect(deviceRetry.status()).toBe(201);
+      expect(deviceRetry.status()).toBe(200);
       expect((await deviceRetry.json()).appointment.id).toBe(id);
       await assertOne(booking, tenant, input);
       expect(
@@ -466,7 +490,7 @@ test("production requests keep database connections within one pool limit", asyn
     const input = inputFor(tenant);
     for (let index = 0; index < 12; index++) {
       const response = await post(request, tenant, input);
-      expect(response.status()).toBe(201);
+      expect(response.status()).toBe(index === 0 ? 201 : 200);
     }
     await assertOne(booking, tenant, input);
   }

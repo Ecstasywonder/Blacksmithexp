@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { proxyEnvironment, proxyHeaders } from "./support/trusted-proxy";
 import { resolve } from "node:path";
 
 for (const name of [
@@ -32,6 +33,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: `http://127.0.0.1:${port}`,
+    extraHTTPHeaders: proxyHeaders,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -52,6 +54,6 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 300_000,
     url: `http://127.0.0.1:${port}/api/health`,
-    env: { NEXT_TELEMETRY_DISABLED: "1" },
+    env: { NEXT_TELEMETRY_DISABLED: "1", VERCEL: "", ...proxyEnvironment },
   },
 });
