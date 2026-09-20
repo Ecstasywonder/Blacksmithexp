@@ -8,7 +8,10 @@ export default function SignInPage() {
     <main className="narrow">
       <p className="eyebrow">Business portal</p>
       <h1>Sign in</h1>
-      <p>Authentication provider integration belongs behind the server-side identity adapter.</p>
+      <p>
+        Authentication provider integration belongs behind the server-side
+        identity adapter.
+      </p>
     </main>
   );
 }

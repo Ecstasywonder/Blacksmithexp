@@ -3,6 +3,26 @@ import postgres from "postgres";
 import * as schema from "./schema";
 
 export { withTenantTransaction } from "./tenant-transaction";
+export {
+  getPublishedBookingCatalog,
+  resolvePublishedTenantId,
+  type PublicBookingCatalog,
+  type PublicBookingService,
+} from "./public-booking-catalog";
+export {
+  BookingSliceError,
+  getDashboardMembership,
+  listDashboardAppointments,
+  requestPublicAppointment,
+  type DashboardAppointmentRecord,
+  type DashboardMembership,
+  type RequestPublicAppointmentInput,
+  type RequestedAppointmentRecord,
+} from "./booking-slice";
+export {
+  grantRuntimePrivileges,
+  resetBookingSliceFixtures,
+} from "./booking-slice-fixtures";
 
 /**
  * Creates the server-only database adapter. The caller owns lifecycle cleanup

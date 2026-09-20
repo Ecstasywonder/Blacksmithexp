@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@chairly/database": "workspace:*",
     "@chairly/domain": "workspace:*",
     "@chairly/shared": "workspace:*",
     "next": "^16.0.0",
@@ -26,4 +27,3 @@
     "typescript": "^5.9.2"
   }
 }
-

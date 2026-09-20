@@ -11,4 +11,3 @@ Deployment must create separate roles outside this migration:
 - worker role with narrowly scoped outbox claim/update access.
 
 The runtime must wrap tenant work in a transaction and use `SET LOCAL app.tenant_id` before any tenant query.
-

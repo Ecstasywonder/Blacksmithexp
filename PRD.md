@@ -34,15 +34,15 @@ Many small beauty and grooming businesses rely on social media profiles, phone c
 
 ### MVP success measures
 
-| Measure | Target after first 90 days |
-| --- | --- |
+| Measure               | Target after first 90 days                                      |
+| --------------------- | --------------------------------------------------------------- |
 | Onboarding completion | At least 60% of businesses that start onboarding publish a page |
-| Time to publish | Median below 15 minutes |
-| Booking completion | At least 50% of customers who select a service submit a request |
-| Business response | Median time from request to decision below 4 business hours |
-| Booking conflicts | Zero confirmed overlapping appointments for one staff member |
-| Reliability | 99.9% monthly availability, excluding planned maintenance |
-| Tenant isolation | Zero cross-tenant data exposure incidents |
+| Time to publish       | Median below 15 minutes                                         |
+| Booking completion    | At least 50% of customers who select a service submit a request |
+| Business response     | Median time from request to decision below 4 business hours     |
+| Booking conflicts     | Zero confirmed overlapping appointments for one staff member    |
+| Reliability           | 99.9% monthly availability, excluding planned maintenance       |
+| Tenant isolation      | Zero cross-tenant data exposure incidents                       |
 
 ## 4. Personas and permissions
 
@@ -197,14 +197,14 @@ Allowed states:
 
 Allowed transitions:
 
-| From | To | Actor |
-| --- | --- | --- |
-| pending | confirmed, declined, cancelled | owner/manager; customer may cancel |
-| confirmed | cancelled, completed, no_show | owner/manager/staff as permitted; customer may cancel |
-| declined | none | terminal |
-| cancelled | none | terminal; rescheduling creates a linked appointment |
-| completed | none | terminal |
-| no_show | none | terminal |
+| From      | To                             | Actor                                                 |
+| --------- | ------------------------------ | ----------------------------------------------------- |
+| pending   | confirmed, declined, cancelled | owner/manager; customer may cancel                    |
+| confirmed | cancelled, completed, no_show  | owner/manager/staff as permitted; customer may cancel |
+| declined  | none                           | terminal                                              |
+| cancelled | none                           | terminal; rescheduling creates a linked appointment   |
+| completed | none                           | terminal                                              |
+| no_show   | none                           | terminal                                              |
 
 - Appointment writes require an idempotency key.
 - Appointment services snapshot the name, duration, and price at booking time.
@@ -320,15 +320,15 @@ Accessibility, security review, load/concurrency tests, admin/support operations
 
 ## 13. Risks and decisions to validate
 
-| Risk/decision | Mitigation or owner |
-| --- | --- |
-| Businesses may expect instant confirmation | Explain request status throughout MVP; evaluate configurable auto-confirm in P1 |
-| Local privacy, tax, and messaging laws vary | Legal review before selecting launch regions |
-| SMS/WhatsApp costs and deliverability | Email in MVP; provider interface and explicit opt-in for P1 |
-| Businesses may use irregular schedules | Weekly rules plus exceptions in MVP; evaluate richer recurrence after pilot |
-| No-shows may drive demand for payments | Data model supports payment/deposit extension; implement only after booking loop is stable |
-| Tenant slug/name conflicts | Reserved-slug list, uniqueness, rename redirects in P1 |
-| Calendar races | Transactional recheck plus PostgreSQL exclusion constraint |
+| Risk/decision                               | Mitigation or owner                                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Businesses may expect instant confirmation  | Explain request status throughout MVP; evaluate configurable auto-confirm in P1            |
+| Local privacy, tax, and messaging laws vary | Legal review before selecting launch regions                                               |
+| SMS/WhatsApp costs and deliverability       | Email in MVP; provider interface and explicit opt-in for P1                                |
+| Businesses may use irregular schedules      | Weekly rules plus exceptions in MVP; evaluate richer recurrence after pilot                |
+| No-shows may drive demand for payments      | Data model supports payment/deposit extension; implement only after booking loop is stable |
+| Tenant slug/name conflicts                  | Reserved-slug list, uniqueness, rename redirects in P1                                     |
+| Calendar races                              | Transactional recheck plus PostgreSQL exclusion constraint                                 |
 
 ## 14. Open product questions
 

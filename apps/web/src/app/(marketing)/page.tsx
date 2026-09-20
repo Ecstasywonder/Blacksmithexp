@@ -12,7 +12,8 @@ export default function MarketingPage() {
         <p className="eyebrow">Your business, bookable online</p>
         <h1>A polished booking page without building a website.</h1>
         <p>
-          Give customers one place to discover your services and request a time. Review and confirm every appointment from a simple dashboard.
+          Give customers one place to discover your services and request a time.
+          Review and confirm every appointment from a simple dashboard.
         </p>
         <Link className="button" href="/sign-in">
           Create your business page

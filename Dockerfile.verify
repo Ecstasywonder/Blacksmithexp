@@ -1,0 +1,14 @@
+# Build the existing local stack first: docker compose build
+FROM chairly-migrator:local
+
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN pnpm --filter @chairly/e2e exec playwright install --with-deps chromium
+
+COPY --chown=node:node . /app
+ENV pnpm_config_enable_global_virtual_store=false
+RUN rm -rf /app/tests/e2e/test-results /app/tests/e2e/playwright-report && \
+    pnpm install --offline --frozen-lockfile --prod=false && chown node:node /app
+ENV pnpm_config_verify_deps_before_run=error
+USER node
+CMD ["node", "tools/container-verify.mjs"]

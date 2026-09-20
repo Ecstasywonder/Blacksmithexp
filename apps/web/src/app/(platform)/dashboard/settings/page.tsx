@@ -4,7 +4,10 @@ export default function SettingsPage() {
     <section>
       <p className="eyebrow">Business configuration</p>
       <h1>Settings</h1>
-      <p>Profile, locations, services, staff, availability, members, and publishing controls belong here.</p>
+      <p>
+        Profile, locations, services, staff, availability, members, and
+        publishing controls belong here.
+      </p>
     </section>
   );
 }

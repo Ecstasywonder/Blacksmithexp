@@ -2,7 +2,13 @@
   "name": "@chairly/e2e",
   "version": "0.0.0",
   "private": true,
-  "scripts": { "test": "playwright test" },
-  "devDependencies": { "@playwright/test": "^1.55.0" }
+  "scripts": {
+    "test": "node ../../tools/run-e2e.mjs"
+  },
+  "devDependencies": {
+    "@chairly/database": "workspace:*",
+    "@chairly/shared": "workspace:*",
+    "@playwright/test": "^1.55.0",
+    "postgres": "^3.4.7"
+  }
 }
-

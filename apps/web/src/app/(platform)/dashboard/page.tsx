@@ -4,7 +4,10 @@ export default function DashboardPage() {
     <section>
       <p className="eyebrow">Business dashboard</p>
       <h1>Today at a glance</h1>
-      <p>Tenant resolution, authorization, and real appointment data are the first implementation slice.</p>
+      <p>
+        Tenant resolution, authorization, and real appointment data are the
+        first implementation slice.
+      </p>
     </section>
   );
 }

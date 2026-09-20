@@ -1,4 +1,5 @@
 # End-to-end tests
 
-Add critical onboarding, publishing, booking, confirmation, cancellation, tenant-isolation, and accessibility journeys here. Tests must use synthetic tenants and customers only.
-
+Critical browser journeys live here. The booking-slice runner seeds deterministic
+synthetic tenants in PostgreSQL and uses the real repository-backed booking flow
+plus a signed `chairly_session` for private dashboard coverage.

@@ -14,8 +14,6 @@ The product requirements are in [PRD.md](./PRD.md), the technical design is in [
 
 ## Local setup
 
-The repository is a scaffold; feature implementations and generated lockfile are intentionally not included yet.
-
 1. Install Node.js 22+ and pnpm 11+.
 2. Copy `.env.example` to `.env.local` and set local-only values.
 3. Start PostgreSQL 16+ and create the application and migration roles described in the architecture.
@@ -23,3 +21,37 @@ The repository is a scaffold; feature implementations and generated lockfile are
 5. Run `pnpm dev`.
 
 Do not use production customer data or credentials in local development.
+
+## Booking slice
+
+The Docker-backed booking verification slice uses a real PostgreSQL 16
+container, deterministic synthetic tenants, two PostgreSQL integration tests,
+and eight Playwright scenarios against the database-backed repository.
+
+- `pnpm booking-slice:setup`
+- `pnpm booking-slice:verify`
+- `pnpm booking-slice:check`
+- `pnpm booking-slice:teardown`
+
+See [`docs/booking-slice.md`](./docs/booking-slice.md) for the expected environment and flow.
+
+## Full-stack containers
+
+Run PostgreSQL, migrations, and the production-style Next.js server together:
+
+```bash
+pnpm container:up
+```
+
+The application is available at `http://localhost:3000`. Useful commands:
+
+- `pnpm container:ps` — show container and health state.
+- `pnpm container:logs` — follow web and database logs.
+- `pnpm container:seed` — load deterministic local booking fixtures.
+- `pnpm container:down` — stop containers but preserve database data.
+- `pnpm container:reset` — stop containers and delete local database data.
+
+Containerized development does not change the Git workflow: edit on the host,
+review and commit changes, then push the branch normally. See
+[`docs/containerization.md`](./docs/containerization.md) for the complete build,
+runtime, data, GitHub, and optional image-registry workflow.
