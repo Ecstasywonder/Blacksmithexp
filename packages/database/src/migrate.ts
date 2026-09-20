@@ -6,7 +6,10 @@ import postgres from "postgres";
 
 const migrationDatabaseUrl = process.env.MIGRATION_DATABASE_URL;
 if (!migrationDatabaseUrl) {
-  throw new Error("MIGRATION_DATABASE_URL is required for database migrations");
+  console.error(
+    "Database migration setup failed: MIGRATION_DATABASE_URL is required. Use the documented booking slice setup or configure the migration role URL.",
+  );
+  process.exit(1);
 }
 
 const migrationFilePattern = /^\d{4}_[a-z0-9_]+\.sql$/;
@@ -28,8 +31,13 @@ function migrationBody(source: string): string {
   return withoutCommit;
 }
 
-const client = postgres(migrationDatabaseUrl, { prepare: false, max: 1 });
+const client = postgres(migrationDatabaseUrl, {
+  prepare: false,
+  max: 1,
+  onnotice: () => {},
+});
 
+let currentMigration = "migration ledger";
 try {
   await client`
     create table if not exists chairly_schema_migrations (
@@ -44,6 +52,7 @@ try {
     .sort();
 
   for (const filename of filenames) {
+    currentMigration = filename;
     const source = await readFile(join(migrationsDirectory, filename), "utf8");
     const checksum = createHash("sha256").update(source).digest("hex");
 
@@ -64,6 +73,10 @@ try {
         return;
       }
 
+      // 0003 cannot apply on supported PostgreSQL: its exclusion expression
+      // is not immutable. Preserve its bytes/checksum for existing ledgers;
+      // the forward-only 0004 replacement includes all of its DDL.
+      if (filename === "0003_booking_guards_and_owner_identity.sql") return;
       await transaction.unsafe(migrationBody(source));
       await transaction`
         insert into chairly_schema_migrations (filename, checksum)
@@ -71,6 +84,13 @@ try {
       `;
     });
   }
+} catch (error: unknown) {
+  const code =
+    error instanceof postgres.PostgresError ? error.code : "configuration";
+  console.error(
+    `Database migration failed: ${currentMigration} (${code}). Check database connectivity, role permissions and migration rollout notes; do not edit applied migrations.`,
+  );
+  process.exitCode = 1;
 } finally {
   await client.end();
 }

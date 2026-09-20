@@ -190,7 +190,7 @@ async function selectAvailableAssignment(
 
   for (const assignment of assignments) {
     const preferredTimes = await transaction.execute<{
-      startsAt: Date;
+      startsAt: string;
       roundTrip: string;
       meetsLeadTime: boolean;
       withinHorizon: boolean;
@@ -227,11 +227,13 @@ async function selectAvailableAssignment(
     }
     hasValidPreferredTime = true;
 
+    // Drizzle's raw PostgreSQL results leave timestamps as strings.
+    const startsAt = new Date(preferred.startsAt);
     const endsAt = new Date(
-      preferred.startsAt.getTime() + assignment.durationMinutes * 60_000,
+      startsAt.getTime() + assignment.durationMinutes * 60_000,
     );
     const bufferedStartsAt = new Date(
-      preferred.startsAt.getTime() - assignment.bufferBeforeMinutes * 60_000,
+      startsAt.getTime() - assignment.bufferBeforeMinutes * 60_000,
     );
     const bufferedEndsAt = new Date(
       endsAt.getTime() + assignment.bufferAfterMinutes * 60_000,
@@ -265,8 +267,8 @@ async function selectAvailableAssignment(
               and location_id = ${assignment.locationId}
               and (staff_id is null or staff_id = ${assignment.staffId})
               and kind = 'available'
-              and starts_at <= ${bufferedStartsAt}
-              and ends_at >= ${bufferedEndsAt}
+              and starts_at <= ${bufferedStartsAt.toISOString()}
+              and ends_at >= ${bufferedEndsAt.toISOString()}
           )
         )
         and not exists (
@@ -276,8 +278,8 @@ async function selectAvailableAssignment(
             and location_id = ${assignment.locationId}
             and (staff_id is null or staff_id = ${assignment.staffId})
             and kind = 'closed'
-            and starts_at < ${bufferedEndsAt}
-            and ends_at > ${bufferedStartsAt}
+            and starts_at < ${bufferedEndsAt.toISOString()}
+            and ends_at > ${bufferedStartsAt.toISOString()}
         )
       ) as "isAvailable"
     `);
@@ -299,17 +301,17 @@ async function selectAvailableAssignment(
         and status in ('pending', 'confirmed')
         and starts_at
               - buffer_before_minutes_snapshot * interval '1 minute'
-            < ${bufferedEndsAt}
+            < ${bufferedEndsAt.toISOString()}
         and ends_at
               + buffer_after_minutes_snapshot * interval '1 minute'
-            > ${bufferedStartsAt}
+            > ${bufferedStartsAt.toISOString()}
       limit 1
     `);
     if (conflicts.length === 0) {
       return {
         ok: true,
         assignment,
-        startsAt: preferred.startsAt,
+        startsAt,
         endsAt,
       };
     }
@@ -603,8 +605,8 @@ export class PostgresAppointmentRequestRepository implements AppointmentRequestR
               ${command.contactDetail},
               'pending',
               'public_web',
-              ${startsAt},
-              ${endsAt},
+              ${startsAt.toISOString()},
+              ${endsAt.toISOString()},
               ${assignment.timeZone},
               ${command.preferredTime},
               ${assignment.bufferBeforeMinutes},
@@ -741,9 +743,10 @@ export async function getOwnerPendingAppointments(
       return null;
     }
 
-    const pendingAppointments =
-      await transaction.execute<PendingAppointmentRow>(
-        sql`
+    const pendingAppointments = await transaction.execute<
+      Omit<PendingAppointmentRow, "createdAt"> & { createdAt: string }
+    >(
+      sql`
         select
           appointment.id,
           appointment.status,
@@ -762,11 +765,14 @@ export async function getOwnerPendingAppointments(
           and appointment.status = 'pending'
         order by appointment.created_at asc, appointment.id asc
       `,
-      );
+    );
 
     return {
       ...authorizedTenant,
-      appointments: [...pendingAppointments],
+      appointments: pendingAppointments.map((appointment) => ({
+        ...appointment,
+        createdAt: new Date(appointment.createdAt),
+      })),
     };
   });
 }

@@ -345,6 +345,29 @@ test(
         resultA.ok ? resultA.appointment.id : null,
       );
 
+      // Exercise the database exclusion guard directly, independent of the
+      // service-layer recheck, under both UTC and a DST-observing session.
+      for (const timeZone of ["UTC", "America/New_York"]) {
+        for (const status of ["pending", "confirmed"]) {
+          await assert.rejects(
+            administrator.begin(async (transaction) => {
+              await transaction`select set_config('TimeZone', ${timeZone}, true)`;
+              await transaction`select set_config('app.tenant_id', ${tenantA.id}, true)`;
+              // 09:00 appointment ends at 10:00; extending its buffer to
+              // 10:31 conflicts with the 10:30 request without moving either.
+              await transaction`
+                update appointments
+                set buffer_after_minutes_snapshot = 31, status = ${status}
+                where tenant_id = ${tenantA.id}
+                  and id = ${distinctTimeA.ok ? distinctTimeA.appointment.id : null}
+              `;
+            }),
+            (error: unknown) =>
+              error instanceof postgres.PostgresError && error.code === "23P01",
+          );
+        }
+      }
+
       const simultaneousCommand = {
         tenantSlug: tenantA.slug,
         serviceId: tenantA.serviceId,
@@ -404,6 +427,7 @@ test(
           appointment.preferredTime === identicalCustomer.preferredTime,
       );
       assert.ok(originalPendingA);
+      assert.ok(Number.isFinite(originalPendingA.createdAt.getTime()));
       assert.deepEqual(
         {
           service: originalPendingA.serviceName,

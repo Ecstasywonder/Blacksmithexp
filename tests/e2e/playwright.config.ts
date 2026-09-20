@@ -9,6 +9,7 @@ const localBrowser =
 export default defineConfig({
   testDir: ".",
   testMatch: "**/*.spec.ts",
+  testIgnore: "booking-slice.spec.ts",
   fullyParallel: true,
   timeout: 90_000,
   retries: process.env.CI ? 2 : 0,

@@ -1,0 +1,14 @@
+**/node_modules
+**/.next
+**/.env*
+.git
+Blacksmithexp
+.worktrees
+.bew005-recovery
+output
+**/test-results
+**/playwright-report
+**/*.log
+**/*.tsbuildinfo
+
+**/*.code-workspace

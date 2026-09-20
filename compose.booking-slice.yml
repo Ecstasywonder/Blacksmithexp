@@ -1,0 +1,52 @@
+name: chairly-booking-slice
+services:
+  postgres:
+    image: postgres:16.13-bookworm
+    environment:
+      POSTGRES_DB: chairly
+      POSTGRES_USER: chairly_migrator
+      POSTGRES_PASSWORD: local-migration-only
+    volumes:
+      - booking-data:/var/lib/postgresql/data
+      - ./tooling/booking-slice/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chairly_migrator -d chairly"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  slice:
+    build:
+      context: .
+      dockerfile: tooling/booking-slice/Dockerfile
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3310:3310"
+    environment:
+      DATABASE_URL: postgresql://chairly_app:local-runtime-only@postgres:5432/chairly
+      MIGRATION_DATABASE_URL: postgresql://chairly_migrator:local-migration-only@postgres:5432/chairly
+      APP_ORIGIN: http://127.0.0.1:3310
+      AUTH_ISSUER_URL: http://127.0.0.1:3310/local-oidc
+      AUTH_CLIENT_ID: booking-slice
+      AUTH_CLIENT_SECRET: local-oidc-client-only
+      AUTH_SESSION_SECRET: local-session-secret-not-for-production-006
+      RATE_LIMIT_SECRET: local-rate-limit-secret-not-for-production-006
+      TRUSTED_PROXY_CLIENT_IP_HEADER: x-chairly-client-ip
+      TRUSTED_PROXY_CLIENT_IP_SECRET: local-proxy-secret-not-for-production-006
+      NEXT_TELEMETRY_DISABLED: "1"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3310/luma-studio/book').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 15s
+volumes:
+  booking-data:

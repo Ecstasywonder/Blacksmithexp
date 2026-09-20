@@ -11,7 +11,7 @@
     "build": "pnpm -r --if-present build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test",
+    "test": "node --test tooling/booking-slice/runner.test.mjs && pnpm --filter \"!@chairly/e2e\" -r --if-present test",
     "test:e2e": "pnpm --filter @chairly/e2e test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
