@@ -1,8 +1,23 @@
-# Chairly
+# Chairly — Multi-Tenant Appointment SaaS
 
-Multi-tenant public-page and appointment-request platform for salons, barbers, makeup artists, and related small businesses. A public booking request is persisted as a tenant-owned pending appointment and appears automatically in the authenticated owner dashboard.
+Chairly is a multi-tenant public-page and appointment-request platform for salons, barbers, makeup artists, and related small businesses.
 
-The product requirements are in [PRD.md](./PRD.md), the technical design is in [Architecture.md](./Architecture.md), and repository guidance is in [AGENTS.md](./AGENTS.md).
+The project focuses on **secure multi-tenancy, API design, database boundaries, authorization, reliability, and automated testing**.
+
+## Engineering Highlights
+
+- Multi-tenant Next.js application architecture
+- PostgreSQL schema, migrations, and database boundary
+- Framework-independent domain layer for booking and authorization rules
+- Shared validation and error contracts
+- Managed OpenID Connect authentication
+- Tenant-aware authorization and database security boundaries
+- Idempotent public booking API
+- Rate limiting and request-size controls
+- HMAC-based trusted-proxy client identity
+- Constant-time signature comparison and fail-closed behavior
+- Request IDs and safe customer-facing errors
+- Browser-based end-to-end testing
 
 ## Workspace
 
@@ -12,28 +27,86 @@ The product requirements are in [PRD.md](./PRD.md), the technical design is in [
 - `packages/shared` — shared validation and error contracts
 - `tests/e2e` — critical browser journeys
 
-## Local setup
+## Architecture & Documentation
 
-1. Install Node.js 22+ and pnpm 11+.
-2. Copy `.env.example` to `.env.local` and set local-only values.
-3. Start PostgreSQL 16+ and create the application and migration roles described in the architecture.
-4. Run `pnpm install`, then run `pnpm db:migrate` with the migration role configured in `MIGRATION_DATABASE_URL`.
-5. Run `pnpm dev`.
+The repository includes:
+
+- [Product requirements](./PRD.md)
+- [Technical architecture](./Architecture.md)
+- [Engineering guidance](./AGENTS.md)
+
+The architecture deliberately separates presentation, domain rules, persistence, validation, and authentication concerns.
+
+## Public Booking API
+
+`POST /api/public/{tenantSlug}/appointments`
+
+A newly created request returns `201` with `outcome: "created"`.
+
+An idempotent replay returns `200` with `outcome: "duplicate"` and the original appointment ID.
+
+Invalid, conflicting, rate-limited, and internal failures use safe customer-facing messages and include a request ID. Rate-limited responses include `Retry-After`.
+
+## Security Model
+
+### Authentication
+
+Business owners authenticate through a managed OpenID Connect provider. The callback requires a matching local user and active owner membership; tenant and role information are not accepted from the browser.
+
+### Database Boundaries
+
+The runtime role must not own schema objects or have `BYPASSRLS`. Application access is constrained through explicit database functions for published tenants, owner membership, and public booking rate limits.
+
+### Trusted Proxy Identity
+
+For self-hosted deployments, the trusted gateway must strip inbound client-identity headers and set the configured client IP header plus its HMAC signature.
+
+The application validates the header and secret, compares the signature in constant time, fails closed when identity data is invalid, and does not trust `x-forwarded-for` by default.
+
+### Request Protection
+
+The booking endpoint enforces an 8 KiB JSON request limit without buffering an unbounded request body.
+
+Rate-limit counters persist only an HMAC-derived client identifier rather than the raw client address.
+
+## Local Development
+
+### Prerequisites
+
+- Node.js 22+
+- pnpm 11+
+- PostgreSQL 16+
+
+### Setup
+
+1. Copy `.env.example` to `.env.local`.
+2. Configure local-only values.
+3. Start PostgreSQL.
+4. Configure the migration and application roles described in the architecture.
+5. Run:
+
+```bash
+pnpm install
+pnpm db:migrate
+pnpm dev
+```
 
 Do not use production customer data or credentials in local development.
 
-## Business authentication
+## Testing
 
-Configure a managed OpenID Connect provider with the callback URL `${APP_ORIGIN}/auth/callback`. `AUTH_ISSUER_URL`, `AUTH_CLIENT_ID`, `AUTH_CLIENT_SECRET`, and a random `AUTH_SESSION_SECRET` of at least 32 characters are required. The provider issuer/subject pair must already map to a local `users` row with an active owner membership; the callback never accepts a tenant or role from the browser.
+Critical browser journeys are covered by the `tests/e2e` workspace.
 
-The deployment runtime role needs `EXECUTE` on `app.resolve_published_tenant(text)`, `app.resolve_owner_membership(text, text)`, and `app.consume_public_booking_rate_limit(text, integer, integer)`. It must not own schema objects or have `BYPASSRLS`.
+The project also separates business rules into a framework-independent domain package, making core booking and authorization behavior easier to reason about and test independently from the web layer.
 
-## Public booking contract
+## Portfolio Focus
 
-`POST /api/public/{tenantSlug}/appointments` accepts JSON containing `serviceId`, `customerName`, `contactDetail`, and a timezone-local `preferredTime` in `YYYY-MM-DDTHH:mm` form. A newly created request returns `201` with `outcome: "created"`; an idempotent replay returns `200` with `outcome: "duplicate"`. Both responses include the original appointment ID and `pending` status. Invalid, unmatched, conflicting, rate-limited, and internal failures use the safe customer message documented in the product requirements and include a request ID; `429` responses include `Retry-After`.
+**Multi-tenancy → authorization → database security → API reliability → abuse prevention → automated testing**
 
-Set `RATE_LIMIT_SECRET` to a separate random value of at least 32 characters. Only an HMAC of the normalized business slug and proxy-supplied client address is persisted in rate-limit counters. Vercel deployments use the platform-overwritten `x-vercel-forwarded-for` header.
+## Author
 
-For self-hosting, keep the application origin private and configure the trusted gateway to strip inbound client-identity headers, set exactly one client IP in the header named by `TRUSTED_PROXY_CLIENT_IP_HEADER`, and set `x-chairly-client-ip-signature` to the lowercase hex HMAC-SHA256 of `client-ip:v1\0<header-name>\0<client-ip>` using the separate 32-or-more-character `TRUSTED_PROXY_CLIENT_IP_SECRET`. The application compares that signature in constant time and fails closed when the header, secret, IP, or signature is invalid. It never trusts `x-forwarded-for` by default.
+**Chinwendu Onyeani**  
+Software / DevOps Engineer
 
-The route streams and enforces its 8 KiB JSON limit without buffering an unbounded request body. A self-hosted reverse proxy should enforce the same or a stricter payload limit before traffic reaches Next.js.
+GitHub: https://github.com/Ecstasywonder  
+Email: chinwenduonyeani@gmail.com
