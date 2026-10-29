@@ -1,3 +1,28 @@
+<!-- PORTFOLIO_STAR_V1 -->
+# Chairly — Secure Multi-Tenant Appointment SaaS
+
+**Engineering case study — STAR framework**
+
+### Situation
+Public booking in a multi-tenant system creates risks around tenant boundaries, abusive traffic and duplicate submissions.
+
+### Task
+Design an appointment platform with explicit authorization boundaries and safe retry behavior.
+
+### Action
+Implemented a Next.js/PostgreSQL application with OIDC, tenant-/role-aware authorization, validation contracts, request IDs, rate limits, trusted-proxy HMAC checks, idempotency handling and browser E2E tests.
+
+### Result
+The repository documents 201 responses for new bookings and 200 for idempotent replays, alongside security-oriented verification commands. These are implementation properties documented in the codebase, not evidence of an externally audited production service.
+
+**Evidence and technical detail:** [Architecture](Architecture.md) · [Product requirements](PRD.md)
+
+> **Accuracy note:** Outcomes refer to documented implementation and verification. Unmeasured user impact, production reliability, and commercial success are not implied.
+
+---
+
+## Full technical documentation
+
 # Chairly — Multi-Tenant Appointment SaaS
 
 **Secure multi-tenant appointment platform designed around tenant isolation, authorization and reliable public booking.**
